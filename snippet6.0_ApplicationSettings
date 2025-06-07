@@ -1,0 +1,66 @@
+' Module: ApplicationSettings
+
+' Define module-level variables to store original Excel settings
+Private originalCalculation As XlCalculation
+Private originalScreenUpdating As Boolean
+Private originalEnableEvents As Boolean
+Private originalStatusBar As Variant
+Private originalDisplayAlerts As Boolean
+Private originalCutCopyMode As Boolean
+
+Sub SaveExcelSettings()
+    ' Save current Excel application settings to restore later
+    
+    ' Save calculation mode
+    originalCalculation = Application.Calculation
+    
+    ' Save UI settings
+    originalScreenUpdating = Application.ScreenUpdating
+    originalStatusBar = Application.StatusBar
+    originalDisplayAlerts = Application.DisplayAlerts
+    
+    ' Save events setting
+    originalEnableEvents = Application.EnableEvents
+    
+    ' Save clipboard state
+    originalCutCopyMode = Application.CutCopyMode
+End Sub
+
+Sub RestoreExcelSettings()
+    ' Restore Excel application settings to their original values
+    On Error Resume Next  ' In case some settings can't be restored
+    
+    ' Restore calculation mode
+    Application.Calculation = originalCalculation
+    
+    ' Restore UI settings
+    Application.ScreenUpdating = originalScreenUpdating
+    Application.StatusBar = originalStatusBar
+    Application.DisplayAlerts = originalDisplayAlerts
+    
+    ' Restore events setting
+    Application.EnableEvents = originalEnableEvents
+    
+    ' Restore clipboard if it was in use
+    If originalCutCopyMode Then
+        ' Can't really restore clipboard, but we can clear it if it was empty
+        Application.CutCopyMode = False
+    End If
+    
+    ' Reset find format
+    Application.FindFormat.Clear
+    
+    On Error GoTo 0
+End Sub
+
+Sub ResetFindBehavior()
+    ' Reset Find dialog behavior to default
+    On Error Resume Next
+    
+    With Application
+        .FindFormat.Clear
+        .ReplaceFormat.Clear
+    End With
+    
+    On Error GoTo 0
+End Sub
