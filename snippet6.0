@@ -1,0 +1,4478 @@
+Option Explicit
+
+' =================================== GLOBAL VARIABLES ===================================
+Dim gstrInputFileAPath As String
+Dim gstrInputFileBPath As String
+Dim gstrSupplementaryFileAPath As String
+Dim gstrSupplementaryFileBPath As String
+Dim gstrInputASource As String
+Dim gstrInputBSource As String
+Dim gstrInputADelimiter As String
+Dim gstrInputBDelimiter As String
+Dim gstrSupplementaryADelimiter As String
+Dim gstrSupplementaryBDelimiter As String
+Dim gstrPrimaryKeyA As String
+Dim gstrPrimaryKeyB As String
+Dim gstrSecondaryKeyA As String
+Dim gstrSecondaryKeyB As String
+Dim gstrSupplementaryKeyA As String
+Dim gstrSupplementaryKeyB As String
+Dim gstrSupplementaryASourceKey As String
+Dim gstrSupplementaryBSourceKey As String
+
+' Global variable for maximum number of reconciliation columns
+Public gintMaxReconciliationColumns As Long
+
+' Default value will be set during initialization
+Sub InitializeGlobalVariables()
+    ' Set default value for maximum columns
+    gintMaxReconciliationColumns = 100 ' Change this to your preferred default
+End Sub
+
+
+'******* Temp function *********'
+Sub UpdateMappingTableFormat()
+    ' Updates the format of mapping tables in the Mapping worksheet
+    On Error GoTo ErrorHandler
+    
+    Dim wsMappingDef As Worksheet
+    Dim rangeToSearch As Range
+    Dim cell As Range
+    Dim i As Long
+    Dim tableStartRows() As Long
+    Dim tableStartCols() As Long
+    Dim tableCount As Long
+    Dim columnName As String
+    
+    ' Set worksheet
+    Set wsMappingDef = Worksheets("Mapping")
+    
+    ' Find all mapping tables in the Mapping sheet
+    tableCount = 0
+    ReDim tableStartRows(1 To 100) ' Assume max 100 mapping tables
+    ReDim tableStartCols(1 To 100) ' Store start column for each table
+    
+    ' Search for "Input File: " text to find mapping table starts
+    Set rangeToSearch = wsMappingDef.UsedRange
+    
+    For Each cell In rangeToSearch.Cells
+        If InStr(1, cell.Value, "Input File:", vbTextCompare) > 0 Then
+            tableCount = tableCount + 1
+            tableStartRows(tableCount) = cell.Row
+            tableStartCols(tableCount) = cell.Column
+        End If
+    Next cell
+    
+    ' If no mapping tables found, exit
+    If tableCount = 0 Then
+        MsgBox "No mapping tables found in the Mapping sheet.", vbInformation, "No Mapping Tables"
+        Exit Sub
+    End If
+    
+    ' Process each mapping table
+    For i = 1 To tableCount
+        Dim startRow As Long, startCol As Long
+        startRow = tableStartRows(i)
+        startCol = tableStartCols(i)
+        
+        ' Check if the table is already in the new format
+        If wsMappingDef.Cells(startRow + 1, startCol).Value = "Column Name in Source File" Then
+            ' Current format - need to update:
+            
+            ' Get the column name from the current position (row+2)
+            columnName = wsMappingDef.Cells(startRow + 2, startCol).Value
+            
+            ' Store all mapping values temporarily
+            Dim lastRow As Long
+            lastRow = startRow + 2
+            While wsMappingDef.Cells(lastRow + 1, startCol).Value <> ""
+                lastRow = lastRow + 1
+            Wend
+            
+            ' Clear the headers and move everything up
+            wsMappingDef.Cells(startRow + 1, startCol).Value = columnName
+            wsMappingDef.Cells(startRow + 1, startCol + 1).Value = "Mapping Value"
+            
+            ' Move all mapping values up one row
+            wsMappingDef.Range(wsMappingDef.Cells(startRow + 3, startCol), _
+                              wsMappingDef.Cells(lastRow, startCol + 1)).Cut _
+                              Destination:=wsMappingDef.Cells(startRow + 2, startCol)
+            
+            ' Clear the old last row that's now duplicated
+            wsMappingDef.Cells(lastRow, startCol).ClearContents
+            wsMappingDef.Cells(lastRow, startCol + 1).ClearContents
+            
+            ' Format the table
+            wsMappingDef.Cells(startRow + 1, startCol).Font.Bold = True
+            wsMappingDef.Cells(startRow + 1, startCol + 1).Font.Bold = True
+            
+            ' Apply borders to the entire table
+            lastRow = startRow + 2
+            While wsMappingDef.Cells(lastRow, startCol).Value <> ""
+                lastRow = lastRow + 1
+            Wend
+            lastRow = lastRow - 1
+            
+            wsMappingDef.Range(wsMappingDef.Cells(startRow, startCol), _
+                              wsMappingDef.Cells(lastRow, startCol + 1)).Borders.LineStyle = xlContinuous
+        End If
+    Next i
+    
+    ' Format example tables in the Mapping worksheet
+    FormatExampleMappingTables
+    
+    MsgBox "Mapping table format updated successfully!", vbInformation
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in UpdateMappingTableFormat", vbCritical, "Error"
+End Sub
+
+' Also update the debugging function to diagnose recon issues
+Sub RunDiagnostic()
+    ' This is a simple wrapper to run the diagnostic function
+    ' Change these parameters to match your data
+    
+    ' The column number containing the primary key in File A
+    Dim fileAKeyCol As Long
+    fileAKeyCol = 1  ' Change this to your primary key column number
+    
+    ' The column number containing the primary key in File B
+    Dim fileBKeyCol As Long
+    fileBKeyCol = 1  ' Change this to your primary key column number
+    
+    ' The key value to search for - change this to a key that's showing issues
+    Dim keyToFind As String
+    keyToFind = "TRX008"  ' Change this to a specific key having problems
+    
+    ' Run the diagnostic
+    DiagnoseReconciliation fileAKeyCol, fileBKeyCol, keyToFind
+    
+    ' For Mac, also write to a cell for visibility
+    DisplayDebugResults
+End Sub
+
+Sub DisplayDebugResults()
+    ' Display debug results in a visible worksheet
+    ' This helps on Mac where the immediate window may not show all output
+    
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets("DebugOutput")
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.count))
+        ws.Name = "DebugOutput"
+    End If
+    On Error GoTo 0
+    
+    ' Clear previous results
+    ws.Cells.Clear
+    
+    ' Add header
+    ws.Range("A1").Value = "Debug Output"
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Font.Size = 14
+    
+    ' Add a diagnostic hint - direct fix approach
+    ws.Range("A3").Value = "DIRECT MATCHING FIX:"
+    ws.Range("A3").Font.Bold = True
+    
+    ws.Range("A4").Value = "Try replacing the complex lookup code with direct record-to-record comparison:"
+    ws.Range("A5").Value = "1. In PerformReconciliation, look for 'matchRowB = FindInLookup...'"
+    ws.Range("A6").Value = "2. Replace with direct comparison code (see previous suggestions)"
+    ws.Range("A7").Value = "3. Do the same for the 'singleton in B' detection section"
+End Sub
+
+Sub DiagnoseReconciliation(fileAKeyCol As Long, fileBKeyCol As Long, keyToFind As String)
+    ' This function helps diagnose why a specific key isn't being matched correctly
+    Dim wsFileA As Worksheet
+    Dim wsFileB As Worksheet
+    Dim i As Long
+    Dim keyA As String, keyB As String
+    
+    Set wsFileA = Worksheets("Input File A")
+    Set wsFileB = Worksheets("Input File B")
+    
+    Debug.Print "===== DIAGNOSTIC REPORT ====="
+    Debug.Print "Looking for key: '" & keyToFind & "'"
+    
+    ' Check if the key exists in File A
+    Debug.Print "Searching File A (Column " & fileAKeyCol & "):"
+    For i = 4 To wsFileA.Cells(wsFileA.Rows.count, 1).End(xlUp).Row
+        keyA = Trim(wsFileA.Cells(i, fileAKeyCol).Value)
+        
+        If keyA = keyToFind Then
+            Debug.Print "  FOUND in File A: Row " & i & ", Value '" & keyA & "'"
+            Debug.Print "    Exact match: " & (StrComp(keyA, keyToFind, vbBinaryCompare) = 0)
+            Debug.Print "    Length: " & Len(keyA) & " vs " & Len(keyToFind)
+            Debug.Print "    ASCII codes: " & ShowASCII(keyA)
+        End If
+    Next i
+    
+    ' Check if the key exists in File B
+    Debug.Print "Searching File B (Column " & fileBKeyCol & "):"
+    For i = 4 To wsFileB.Cells(wsFileB.Rows.count, 1).End(xlUp).Row
+        keyB = Trim(wsFileB.Cells(i, fileBKeyCol).Value)
+        
+        If keyB = keyToFind Then
+            Debug.Print "  FOUND in File B: Row " & i & ", Value '" & keyB & "'"
+            Debug.Print "    Exact match: " & (StrComp(keyB, keyToFind, vbBinaryCompare) = 0)
+            Debug.Print "    Length: " & Len(keyB) & " vs " & Len(keyToFind)
+            Debug.Print "    ASCII codes: " & ShowASCII(keyB)
+        End If
+    Next i
+    
+    Debug.Print "===== END DIAGNOSTIC ====="
+End Sub
+
+Function ShowASCII(text As String) As String
+    Dim i As Long
+    Dim result As String
+    
+    result = ""
+    For i = 1 To Len(text)
+        result = result & Asc(Mid(text, i, 1)) & " "
+    Next i
+    
+    ShowASCII = result
+End Function
+
+'********************************************************
+
+Function ParseCSVLine(lineText As String, delimiter As String) As String()
+    ' Parses a CSV line respecting quotes and delimiters
+    ' Returns an array of fields properly parsed
+    
+    Dim result() As String
+    Dim fieldCount As Long
+    Dim i As Long
+    Dim currentField As String
+    Dim insideQuotes As Boolean
+    Dim nextChar As String
+    Dim chars() As String
+    
+    ' Handle empty input
+    If Trim(lineText) = "" Then
+        ReDim result(0)
+        ParseCSVLine = result
+        Exit Function
+    End If
+    
+    ' Initialize with reasonable capacity
+    fieldCount = 0
+    ReDim result(0 To gintMaxReconciliationColumns)  ' Start with space for max fields
+    
+    ' Convert line to character array for easier parsing
+    chars = SplitChars(lineText)
+    
+    insideQuotes = False
+    currentField = ""
+    
+    ' Process each character in the line
+    For i = 0 To UBound(chars)
+        ' Get current character
+        Dim currentChar As String
+        currentChar = chars(i)
+        
+        ' Handle quotes
+        If currentChar = """" Then
+            ' Check if this is an escaped quote (double quote)
+            If i < UBound(chars) Then
+                nextChar = chars(i + 1)
+                If nextChar = """" And insideQuotes Then
+                    ' Escaped quote inside quoted field - add a single quote and skip the next one
+                    currentField = currentField & """"
+                    i = i + 1  ' Skip next quote
+                Else
+                    ' Regular quote - toggle insideQuotes flag
+                    insideQuotes = Not insideQuotes
+                End If
+            Else
+                ' Last character is a quote
+                insideQuotes = Not insideQuotes
+            End If
+        
+        ' Handle delimiter
+        ElseIf currentChar = delimiter And Not insideQuotes Then
+            ' End of field - add to result
+            result(fieldCount) = currentField
+            fieldCount = fieldCount + 1
+            currentField = ""
+            
+            ' Resize array if needed
+            If fieldCount > UBound(result) Then
+                ReDim Preserve result(0 To fieldCount + gintMaxReconciliationColumns)
+            End If
+        
+        ' Regular character - add to current field
+        Else
+            currentField = currentField & currentChar
+        End If
+    Next i
+    
+    ' Add the last field
+    result(fieldCount) = currentField
+    fieldCount = fieldCount + 1
+    
+    ' Trim the result array to actual size
+    ReDim Preserve result(0 To fieldCount - 1)
+    
+    ParseCSVLine = result
+End Function
+
+Function SplitChars(text As String) As String()
+    ' Split a string into an array of characters
+    Dim result() As String
+    Dim i As Long
+    
+    If Len(text) = 0 Then
+        ReDim result(0)
+        SplitChars = result
+        Exit Function
+    End If
+    
+    ReDim result(0 To Len(text) - 1)
+    
+    For i = 1 To Len(text)
+        result(i - 1) = Mid(text, i, 1)
+    Next i
+    
+    SplitChars = result
+End Function
+
+Function ReadEntireFile(filePath As String) As String
+    ' Reads an entire file into a string at once
+    Dim fileNum As Integer
+    Dim fileLength As Long
+    Dim fileContent As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' Get a free file number
+    fileNum = FreeFile
+    
+    ' Open the file for binary access (fastest)
+    Open filePath For Binary Access Read As #fileNum
+    
+    ' Get the file length
+    fileLength = LOF(fileNum)
+    
+    ' Prepare a string of the right size
+    fileContent = Space$(fileLength)
+    
+    ' Read the entire file in one operation
+    Get #fileNum, , fileContent
+    
+    ' Close the file
+    Close #fileNum
+    
+    ' Return the file content
+    ReadEntireFile = fileContent
+    
+    Exit Function
+    
+ErrorHandler:
+    ' Close the file if it's open
+    On Error Resume Next
+    Close #fileNum
+    On Error GoTo 0
+    
+    ' Return empty string to indicate error
+    ReadEntireFile = ""
+End Function
+
+' Add this function to your module
+Function IsMacOS() As Boolean
+    #If Mac Then
+        IsMacOS = True
+    #Else
+        IsMacOS = False
+    #End If
+End Function
+
+' Add this function to your module
+Sub OptimizeAppSettings(turnOn As Boolean)
+    ' Store original settings to restore them exactly
+    Static originalScreenUpdating As Boolean
+    Static originalEnableEvents As Boolean
+    Static originalCalculation As XlCalculation
+    Static originalDisplayAlerts As Boolean
+    
+    With Application
+        If turnOn Then
+            ' Store original settings first time
+            originalScreenUpdating = .ScreenUpdating
+            originalEnableEvents = .EnableEvents
+            originalCalculation = .Calculation
+            originalDisplayAlerts = .DisplayAlerts
+            
+            ' Turn off settings that slow down execution
+            .ScreenUpdating = False
+            .EnableEvents = False
+            .Calculation = xlCalculationManual
+            .DisplayAlerts = False
+            
+            ' Status bar handling slightly different on Mac vs Windows
+            #If Mac Then
+                ' Mac may have issues with frequent status bar updates
+                .StatusBar = "Processing... Please wait."
+            #Else
+                .DisplayStatusBar = True
+                .StatusBar = "Processing..."
+            #End If
+        Else
+            ' Restore exact original settings
+            .ScreenUpdating = originalScreenUpdating
+            .EnableEvents = originalEnableEvents
+            .Calculation = originalCalculation
+            .DisplayAlerts = originalDisplayAlerts
+            
+            ' Reset status bar (works on both platforms)
+            .StatusBar = False
+        End If
+    End With
+End Sub
+
+
+Sub UpdateApplyMappingFunction()
+    ' Update code in the ApplyMapping function to handle the new table format
+    MsgBox "Please add the following changes to your ApplyMapping function:" & vbCrLf & vbCrLf & _
+           "1. Change 'columnName = wsMappingDef.Cells(tableStartRows(i) + 2, startCol).Value' to:" & vbCrLf & _
+           "   columnName = wsMappingDef.Cells(tableStartRows(i) + 1, startCol).Value" & vbCrLf & vbCrLf & _
+           "2. Change 'j = tableStartRow + 3' to:" & vbCrLf & _
+           "   j = tableStartRow + 2" & vbCrLf & vbCrLf & _
+           "This will adjust the code to work with the new table format.", vbInformation, _
+           "ApplyMapping Function Updates Needed"
+End Sub
+
+Sub UpdateMappingWorksheet()
+    ' Run both updates
+    UpdateMappingTableFormat
+    UpdateApplyMappingFunction
+End Sub
+' =================================== INITIALIZATION ===================================
+Sub InitializeWorkbook()
+    ' This macro creates all the required worksheets and formats them according to specifications
+    On Error GoTo ErrorHandler
+    
+    ' Save original settings
+    Dim originalDisplayAlerts As Boolean
+    originalDisplayAlerts = Application.DisplayAlerts
+    Dim originalScreenUpdating As Boolean
+    originalScreenUpdating = Application.ScreenUpdating
+    
+    ' Change settings
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    ' Initialize global variables first
+    InitializeGlobalVariables
+    
+    ' Create all required worksheets in a safer way
+    Call SafeCreateAllWorksheets
+    
+    ' Format worksheets
+    Call FormatWorksheets
+    
+    ' Create buttons on Parameters sheet
+    Call CreateButtons
+    
+CleanExit:
+    ' Always restore original settings
+    Application.DisplayAlerts = originalDisplayAlerts
+    Application.ScreenUpdating = originalScreenUpdating
+    
+    If Err.Number = 0 Then
+        MsgBox "Workbook initialized successfully!", vbInformation, "Initialization Complete"
+    End If
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & vbNewLine & _
+           "Try closing and reopening Excel, then run the macro again.", vbCritical, "Initialization Error"
+    Resume CleanExit
+End Sub
+
+Function WorksheetExists(wsName As Variant) As Boolean
+    ' Check if worksheet exists
+    Dim ws As Worksheet
+    
+    On Error Resume Next
+    Set ws = Worksheets(CStr(wsName))
+    On Error GoTo 0
+    
+    WorksheetExists = Not ws Is Nothing
+End Function
+
+Sub SafeCreateAllWorksheets()
+    ' Create all required worksheets in a safer way
+    Dim wsNames As Variant
+    Dim wsColors As Variant
+    Dim i As Integer
+    Dim wsExists As Boolean
+    Dim newWs As Worksheet
+    Dim defaultSheetRenamed As Boolean
+    
+    defaultSheetRenamed = False
+        
+    ' *** Change the order of the worksheet names and colours if worksheet position change is required. *** '
+        
+    ' Define worksheet names
+    wsNames = Array("Instructions", "Input Parameters", "Mapping", "Result", "Dashboard", "Input File A", "Input File B", _
+                   "Supplementary File A", "Supplementary File B")
+        
+    ' Define tab colors (RGB format)
+    wsColors = Array(RGB(255, 255, 153), RGB(204, 255, 204), RGB(192, 192, 192), RGB(255, 204, 153), RGB(255, 255, 204), _
+                     RGB(204, 204, 255), RGB(255, 153, 153), RGB(204, 255, 255), _
+                     RGB(255, 204, 255))
+    
+    ' First check if we have any default sheets (Sheet1, Sheet2, Sheet3)
+    If WorksheetExists("Sheet1") And Not defaultSheetRenamed Then
+        On Error Resume Next
+        Worksheets("Sheet1").Name = wsNames(0)
+        Worksheets(wsNames(0)).Tab.Color = wsColors(0)
+        defaultSheetRenamed = True
+        On Error GoTo 0
+    End If
+    
+    ' Now create or reuse the rest of the sheets
+    For i = defaultSheetRenamed To UBound(wsNames)
+        If WorksheetExists(wsNames(i)) Then
+            ' If the sheet exists, clear its contents but keep the sheet
+            On Error Resume Next
+            Worksheets(wsNames(i)).Cells.Clear
+            ' Try to set the tab color if possible
+            Worksheets(wsNames(i)).Tab.Color = wsColors(i)
+            On Error GoTo 0
+        Else
+            ' Add the sheet if it doesn't exist
+            On Error Resume Next
+            Set newWs = Worksheets.Add(After:=Worksheets(Worksheets.count))
+            If Err.Number = 0 Then
+                newWs.Name = wsNames(i)
+                ' Try to set the tab color if possible
+                newWs.Tab.Color = wsColors(i)
+            End If
+            On Error GoTo 0
+        End If
+    Next i
+    
+    ' Check for any remaining default sheets and delete them
+    On Error Resume Next
+    If WorksheetExists("Sheet1") Then Worksheets("Sheet1").Delete
+    If WorksheetExists("Sheet2") Then Worksheets("Sheet2").Delete
+    If WorksheetExists("Sheet3") Then Worksheets("Sheet3").Delete
+    On Error GoTo 0
+End Sub
+
+Sub FormatWorksheets()
+    ' Format all worksheets according to specifications
+    On Error Resume Next
+    
+    ' 1. Instructions worksheet
+    If WorksheetExists("Instructions") Then
+        Call FormatInstructionsSheet
+    End If
+    
+    ' 2. Input Parameters worksheet
+    If WorksheetExists("Input Parameters") Then
+        Call FormatParametersSheet
+    End If
+    
+    ' 3. Result worksheet
+    If WorksheetExists("Result") Then
+        Call FormatResultSheet
+    End If
+    
+    ' 4-7. Input and Supplementary files worksheets (minimal formatting, content will be populated later)
+    If WorksheetExists("Input File A") Then
+        Call FormatDataSheet("Input File A")
+    End If
+    
+    If WorksheetExists("Input File B") Then
+        Call FormatDataSheet("Input File B")
+    End If
+    
+    If WorksheetExists("Supplementary File A") Then
+        Call FormatDataSheet("Supplementary File A")
+    End If
+    
+    If WorksheetExists("Supplementary File B") Then
+        Call FormatDataSheet("Supplementary File B")
+    End If
+    
+    ' 8. Mapping worksheet
+    If WorksheetExists("Mapping") Then
+        Call FormatMappingSheet
+    End If
+    
+    ' 9. Dashboard worksheet
+    If WorksheetExists("Dashboard") Then
+        Call FormatDashboardSheet
+    End If
+    
+    On Error GoTo 0
+End Sub
+
+Sub FormatInstructionsSheet()
+    ' Format Instructions worksheet
+    Dim ws As Worksheet
+    Set ws = Worksheets("Instructions")
+    
+    ' Clear sheet
+    ws.Cells.Clear
+    
+    ' Add title
+    ws.Range("A1").Value = "RECONCILIATION TOOL - INSTRUCTIONS"
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Font.Size = 16
+    
+    ' Add instructions
+    ws.Range("A3").Value = "HOW TO USE THIS RECONCILIATION TOOL:"
+    ws.Range("A3").Font.Bold = True
+    
+    ws.Range("A5").Value = "1. Go to 'Input Parameters' tab and fill in the required information:"
+    ws.Range("A6").Value = "   - Input File Paths"
+    ws.Range("A7").Value = "   - Data Source Names"
+    ws.Range("A8").Value = "   - File Delimiters"
+    ws.Range("A9").Value = "   - Reconciliation Keys"
+    ws.Range("A10").Value = "   - Mapping Information (if needed)"
+    
+    ws.Range("A12").Value = "2. Use the buttons on the 'Input Parameters' tab to run each step of the reconciliation process:"
+    ws.Range("A13").Value = "   - Load Input Files: Imports data from the specified input files"
+    ws.Range("A14").Value = "   - Load Supplementary Files: Imports data from supplementary files (if specified)"
+    ws.Range("A15").Value = "   - Apply Mapping: Applies any mapping defined in the 'Mapping' tab"
+    ws.Range("A16").Value = "   - Run Reconciliation: Performs the reconciliation based on specified keys"
+    ws.Range("A17").Value = "   - Generate Dashboard: Creates a summary of reconciliation results"
+    
+    ws.Range("A19").Value = "3. View the results in the 'Result' tab and 'Dashboard' tab"
+    
+    ws.Range("A21").Value = "NOTES:"
+    ws.Range("A21").Font.Bold = True
+    ws.Range("A22").Value = "- All data is processed as text to preserve leading zeros"
+    ws.Range("A23").Value = "- For better performance with large files, run each step separately"
+    ws.Range("A24").Value = "- Make sure column names in mapping tables match exactly with input files"
+    
+    ' Auto-fit columns
+    ws.Columns("A:A").AutoFit
+End Sub
+
+Sub FormatParametersSheet()
+    ' Format Input Parameters worksheet
+    Dim ws As Worksheet
+    Set ws = Worksheets("Input Parameters")
+    Dim i As Integer
+    
+    ' Clear sheet
+    ws.Cells.Clear
+    
+    ' Add title
+    ws.Range("A1").Value = "RECONCILIATION TOOL - INPUT PARAMETERS"
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Font.Size = 16
+    ws.Range("A1:F1").Merge
+    
+    ' Format sections
+    
+    ' 1. Input File Paths
+    ws.Range("A3").Value = "1. INPUT FILE PATHS"
+    ws.Range("A3").Font.Bold = True
+    
+    ws.Range("A5").Value = "Input File A"
+    ws.Range("B5").Value = ""
+    ws.Range("C5").Interior.Color = RGB(204, 204, 255)  ' Match 'Input File A' tab color
+    
+    ws.Range("A6").Value = "Input File B"
+    ws.Range("B6").Value = ""
+    ws.Range("C6").Interior.Color = RGB(255, 153, 153)  ' Match 'Input File B' tab color
+    
+    ws.Range("A7").Value = "Supplementary File A (Optional)"
+    ws.Range("B7").Value = ""
+    ws.Range("C7").Interior.Color = RGB(204, 255, 255)  ' Match 'Supplementary File A' tab color
+    
+    ws.Range("A8").Value = "Supplementary File B (Optional)"
+    ws.Range("B8").Value = ""
+    ws.Range("C8").Interior.Color = RGB(255, 204, 255)  ' Match 'Supplementary File B' tab color
+    
+    ' 2. Input Names
+    ws.Range("A10").Value = "2. DATA SOURCE NAMES"
+    ws.Range("A10").Font.Bold = True
+    
+    ws.Range("A12").Value = "Source of Input File A"
+    ws.Range("B12").Value = ""
+    ws.Range("C12").Interior.Color = RGB(204, 204, 255)
+    
+    ws.Range("A13").Value = "Source of Input File B"
+    ws.Range("B13").Value = ""
+    ws.Range("C13").Interior.Color = RGB(255, 153, 153)
+    
+    ' 3. Delimiters
+    ws.Range("A15").Value = "3. FILE DELIMITERS"
+    ws.Range("A15").Font.Bold = True
+    
+    ws.Range("A17").Value = "Delimiter of Input File A"
+    ws.Range("B17").Value = ","
+    
+    ws.Range("A18").Value = "Delimiter of Input File B"
+    ws.Range("B18").Value = ","
+    
+    ws.Range("A19").Value = "Delimiter of Supplementary File A"
+    ws.Range("B19").Value = ","
+    
+    ws.Range("A20").Value = "Delimiter of Supplementary File B"
+    ws.Range("B20").Value = ","
+    
+    ' 4. Reconciliation Keys
+    ws.Range("A22").Value = "4. RECONCILIATION KEYS"
+    ws.Range("A22").Font.Bold = True
+    
+    ws.Range("A24").Value = "Column Name for Recon Keys"
+    ws.Range("B24").Value = "Primary Key"
+    ws.Range("C24").Value = "Secondary Key"
+    ws.Range("A24:C24").Font.Bold = True
+    
+    ws.Range("A25").Value = "Input File A"
+    ws.Range("B25").Value = ""
+    ws.Range("C25").Value = ""
+    
+    ws.Range("A26").Value = "Input File B"
+    ws.Range("B26").Value = ""
+    ws.Range("C26").Value = ""
+    
+    ' 5. Supplementary Data A Keys
+    ws.Range("A28").Value = "5. SUPPLEMENTARY DATA A KEYS"
+    ws.Range("A28").Font.Bold = True
+    
+    ws.Range("A30").Value = "Column Name for Supplementary Data A Keys"
+    ws.Range("B30").Value = "Primary Key"
+    ws.Range("A30:B30").Font.Bold = True
+    
+    ws.Range("A31").Value = "Input File A"
+    ws.Range("B31").Value = ""
+    
+    ws.Range("A32").Value = "Supplementary File A"
+    ws.Range("B32").Value = ""
+    
+    ' 6. Supplementary Data B Keys - MOVED UP to A34
+    ws.Range("A34").Value = "6. SUPPLEMENTARY DATA B KEYS"
+    ws.Range("A34").Font.Bold = True
+    
+    ws.Range("A36").Value = "Column Name for Supplementary Data B Keys"
+    ws.Range("B36").Value = "Primary Key"
+    ws.Range("A36:B36").Font.Bold = True
+    
+    ws.Range("A37").Value = "Input File B"
+    ws.Range("B37").Value = ""
+    
+    ws.Range("A38").Value = "Supplementary File B"
+    ws.Range("B38").Value = ""
+    
+    ' NEW SECTION: Supplementary Data Columns at L3
+    ws.Range("L3").Value = "SUPPLEMENTARY DATA COLUMN AT RECON RESULT"
+    ws.Range("L3").Font.Bold = True
+    
+    ' Headers for supplementary columns
+    ws.Range("L5").Value = "Supplementary File A Columns"
+    ws.Range("N5").Value = "Supplementary File B Columns"
+    ws.Range("L5:L5").Font.Bold = True
+    ws.Range("N5:N5").Font.Bold = True
+    
+    ' Add empty rows for supplementary columns input
+    For i = 6 To gintMaxReconciliationColumns + 5
+        ws.Range("L" & i).Value = ""
+        ws.Range("N" & i).Value = ""
+    Next i
+    
+    ' Format the supplementary columns table
+    ws.Range("L5:L" & (gintMaxReconciliationColumns + 5)).Borders.LineStyle = xlContinuous
+    ws.Range("N5:N" & (gintMaxReconciliationColumns + 5)).Borders.LineStyle = xlContinuous
+    
+    ' Add Column Mapping Table in columns I-J
+    ws.Range("I3").Value = "COLUMN MAPPING TABLE"
+    ws.Range("I3").Font.Bold = True
+    
+    ws.Range("I5").Value = "Input File A"
+    ws.Range("J5").Value = "Input File B"
+    ws.Range("I5:J5").Font.Bold = True
+    
+    ' Add empty rows for mapping (can be pre-populated by users)
+    For i = 6 To gintMaxReconciliationColumns + 5
+        ws.Range("I" & i).Value = ""
+        ws.Range("J" & i).Value = ""
+    Next i
+    
+    ' Format the mapping table
+    ws.Range("I5:J" & (gintMaxReconciliationColumns + 5)).Borders.LineStyle = xlContinuous
+    
+    ' Format all cells with borders
+    ws.Range("A3:C38").Borders.LineStyle = xlContinuous
+    
+    ' Auto-fit columns
+    ws.Columns("A:N").AutoFit
+    
+    ' Add red asterisks to mandatory fields
+    AddMandatoryFieldIndicators
+End Sub
+
+Sub AddMandatoryFieldIndicators()
+    ' Add red asterisks to mandatory fields in the Input Parameters sheet
+    On Error GoTo ErrorHandler
+    
+    Dim ws As Worksheet
+    Dim r As Range
+    Dim mandatoryFields As Variant
+    Dim i As Long
+    
+    ' List of mandatory fields to mark with asterisks - field labels in column A
+    mandatoryFields = Array("Input File A", "Input File B", _
+                           "Source of Input File A", "Source of Input File B", _
+                           "Delimiter of Input File A", "Delimiter of Input File B", _
+                           "Column Name for Recon Keys")
+    
+    ' Set worksheet
+    Set ws = Worksheets("Input Parameters")
+    
+    ' Loop through each mandatory field
+    For i = LBound(mandatoryFields) To UBound(mandatoryFields)
+        ' Search for the label in column A
+        Set r = ws.Columns("A").Find(What:=mandatoryFields(i), _
+                                    LookIn:=xlValues, _
+                                    LookAt:=xlWhole, _
+                                    SearchOrder:=xlByRows, _
+                                    SearchDirection:=xlNext, _
+                                    MatchCase:=False)
+        
+        ' If found, add a red asterisk
+        If Not r Is Nothing Then
+            ' Check if it already has an asterisk
+            If Right(r.Value, 1) <> "*" Then
+                ' Add asterisk
+                r.Value = r.Value & " *"
+                
+                ' Format the asterisk in red
+                With r.Characters(Start:=Len(r.Value), Length:=1).Font
+                    .Color = RGB(255, 0, 0)
+                    .Bold = True
+                End With
+            End If
+        End If
+    Next i
+    
+    ' Handle the Primary Key field specifically - it's in cell B24
+    If Not IsEmpty(ws.Range("B24").Value) Then
+        If Right(ws.Range("B24").Value, 1) <> "*" Then
+            ws.Range("B24").Value = ws.Range("B24").Value & " *"
+            
+            With ws.Range("B24").Characters(Start:=Len(ws.Range("B24").Value), Length:=1).Font
+                .Color = RGB(255, 0, 0)
+                .Bold = True
+            End With
+        End If
+    Else
+        ws.Range("B24").Value = "Primary Key *"
+        
+        With ws.Range("B24").Characters(Start:=Len(ws.Range("B24").Value), Length:=1).Font
+            .Color = RGB(255, 0, 0)
+            .Bold = True
+        End With
+    End If
+    
+    ' Also handle the column mapping table in columns I & J
+    ws.Range("I5").Value = "Input File A *"
+    ws.Range("J5").Value = "Input File B *"
+    
+    ' Format the asterisks in red
+    With ws.Range("I5").Characters(Start:=Len(ws.Range("I5").Value), Length:=1).Font
+        .Color = RGB(255, 0, 0)
+        .Bold = True
+    End With
+    
+    With ws.Range("J5").Characters(Start:=Len(ws.Range("J5").Value), Length:=1).Font
+        .Color = RGB(255, 0, 0)
+        .Bold = True
+    End With
+    
+    ' Add a note about mandatory fields
+    ws.Range("A1").Offset(0, 1).Value = "* Mandatory fields"
+    ws.Range("A1").Offset(0, 1).Font.Color = RGB(255, 0, 0)
+    ws.Range("A1").Offset(0, 1).Font.Bold = True
+        
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in AddMandatoryFieldIndicators", vbCritical, "Error"
+End Sub
+
+
+Sub FormatDataSheet(sheetName As String)
+    ' Basic formatting for data sheets
+    Dim ws As Worksheet
+    Set ws = Worksheets(sheetName)
+    
+    ' Clear sheet
+    ws.Cells.Clear
+    
+    ' Add title
+    ws.Range("A1").Value = "DATA FROM " & UCase(sheetName)
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Font.Size = 14
+    
+    ' Add note
+    ws.Range("A2").Value = "This data will be populated when you load the input files."
+    ws.Range("A2").Font.Italic = True
+End Sub
+
+Sub FormatMappingSheet()
+    ' Format Mapping worksheet
+    Dim ws As Worksheet
+    Set ws = Worksheets("Mapping")
+    
+    ' Clear sheet
+    ws.Cells.Clear
+    
+    ' Add title
+    ws.Range("A1").Value = "MAPPING TABLES"
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Font.Size = 16
+    
+    ' Add instructions
+    ws.Range("A3").Value = "Instructions:"
+    ws.Range("A3").Font.Bold = True
+    ws.Range("A4").Value = "- Add mapping tables below for any columns that require value mapping before reconciliation"
+    ws.Range("A5").Value = "- Each mapping table must include the input file (A or B) and the column name"
+    ws.Range("A6").Value = "- Separate mapping tables with at least one empty column"
+    
+    ' Example mapping table
+    ws.Range("A8").Value = "Input File: <A/B>"
+    ws.Range("A8").Font.Bold = True
+    
+    ws.Range("A9").Value = "<Column Name in Source File>"
+    ws.Range("B9").Value = "Mapping Value"
+    ws.Range("A9:B9").Font.Bold = True
+    
+    ws.Range("A10").Value = "<Source Value 1>"
+    ws.Range("B10").Value = "<Mapped Value 1>"
+    
+    ws.Range("A11").Value = "<Source Value 2>"
+    ws.Range("B11").Value = "<Mapped Value 2>"
+    
+    ' Add another example
+    ws.Range("D8").Value = "Input File: <A/B>"
+    ws.Range("D8").Font.Bold = True
+    
+    ws.Range("D9").Value = "<Column Name in Source File>"
+    ws.Range("E9").Value = "Mapping Value"
+    ws.Range("D9:E9").Font.Bold = True
+    
+    ws.Range("D10").Value = "<Source Value 1>"
+    ws.Range("E10").Value = "<Mapped Value 1>"
+    
+    ws.Range("D11").Value = "<Source Value 2>"
+    ws.Range("E11").Value = "<Mapped Value 2>"
+    
+    ' Format table with borders
+    ws.Range("A8:B11").Borders.LineStyle = xlContinuous
+    ws.Range("D8:E11").Borders.LineStyle = xlContinuous
+    
+    ' Auto-fit columns
+    ws.Columns("A:E").AutoFit
+End Sub
+
+Sub FormatResultSheet()
+    ' Basic formatting for Result sheet
+    Dim ws As Worksheet
+    Set ws = Worksheets("Result")
+    
+    ' Clear sheet
+    ws.Cells.Clear
+    
+    ' Add title
+    ws.Range("A1").Value = "RECONCILIATION RESULTS"
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Font.Size = 16
+    
+    ' Add note
+    ws.Range("A2").Value = "Results will be populated when you run the reconciliation process."
+    ws.Range("A2").Font.Italic = True
+End Sub
+
+Sub FormatDashboardSheet()
+    ' Basic formatting for Dashboard sheet
+    Dim ws As Worksheet
+    Set ws = Worksheets("Dashboard")
+    
+    ' Clear sheet
+    ws.Cells.Clear
+    
+    ' Add title
+    ws.Range("A1").Value = "RECONCILIATION DASHBOARD"
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Font.Size = 16
+    
+    ' Add note
+    ws.Range("A2").Value = "Dashboard will be populated after reconciliation is complete."
+    ws.Range("A2").Font.Italic = True
+End Sub
+
+Sub CreateButtons()
+    ' Create buttons on the Parameters sheet
+    On Error Resume Next
+        
+    Dim ws As Worksheet
+    If Not WorksheetExists("Input Parameters") Then
+        MsgBox "Input Parameters sheet doesn't exist. Unable to create buttons.", vbExclamation
+        Exit Sub
+    End If
+        
+    Set ws = Worksheets("Input Parameters")
+        
+    ' Add a section for buttons
+    ws.Range("E3").Value = "RUN RECONCILIATION STEPS"
+    ws.Range("E3").Font.Bold = True
+        
+    ' Remove any existing buttons to avoid duplicates
+    ClearExistingButtons ws
+    
+    ' Calculate the left position based on column E's left edge
+    Dim colE_Left As Double
+    colE_Left = ws.Columns("E").left
+    
+    ' Create buttons for each step
+    ' Note: In macOS, ActiveX controls might not work properly, so we use Form controls
+        
+    ' Button 1: Load Input Files
+    AddButton ws, colE_Left, 65, 120, 30, "ThisWorkbook.LoadInputFiles", "1. Load Input Files", "btnLoadInputFiles"
+        
+    ' Button 2: Load Supplementary Files
+    AddButton ws, colE_Left, 100, 120, 30, "ThisWorkbook.LoadSupplementaryFiles", "2. Load Supplementary Files", "btnLoadSupplementaryFiles"
+        
+    ' Button 3: Apply Mapping
+    AddButton ws, colE_Left, 135, 120, 30, "ThisWorkbook.ApplyMapping", "3. Apply Mapping", "btnApplyMapping"
+        
+    ' Button 4: Run Reconciliation
+    AddButton ws, colE_Left, 170, 120, 30, "ThisWorkbook.RunReconciliation", "4. Run Reconciliation", "btnRunReconciliation"
+        
+    ' Button 5: Generate Dashboard
+    AddButton ws, colE_Left, 205, 120, 30, "ThisWorkbook.GenerateDashboard", "5. Generate Dashboard", "btnGenerateDashboard"
+    
+    ' Add the "OR" text using a label control instead of a cell
+    Dim orLabel As Shape
+    Set orLabel = ws.Shapes.AddLabel(msoTextOrientationHorizontal, colE_Left + 40, 245, 40, 25)
+    With orLabel
+        .TextFrame.Characters.text = "OR"
+        .TextFrame.Characters.Font.Bold = True
+        .TextFrame.Characters.Font.Size = 12
+        .TextFrame.HorizontalAlignment = xlCenter
+        .Line.Visible = msoFalse  ' No border
+        .Fill.Visible = msoFalse  ' Transparent background
+    End With
+        
+    ' Button 6: Run All Steps
+    AddButton ws, colE_Left, 280, 120, 30, "ThisWorkbook.RunAllSteps", "Run All Steps", "btnRunAllSteps"
+        
+    ' Deselect buttons
+    ws.Range("A1").Select
+            
+    On Error GoTo 0
+End Sub
+
+Sub ClearExistingButtons(ws As Worksheet)
+    ' Remove any existing buttons from the worksheet
+    On Error Resume Next
+    
+    ' Clear form buttons
+    Dim btn As Button
+    For Each btn In ws.Buttons
+        btn.Delete
+    Next btn
+    
+    On Error GoTo 0
+End Sub
+
+Sub AddButton(ws As Worksheet, left As Double, top As Double, width As Double, height As Double, _
+              actionName As String, captionText As String, buttonName As String)
+    ' Add a button safely with error handling
+    On Error Resume Next
+    
+    Dim btn As Button
+    Set btn = ws.Buttons.Add(left, top, width, height)
+    
+    If Not btn Is Nothing Then
+        btn.OnAction = actionName
+        btn.Caption = captionText
+        btn.Name = buttonName
+    End If
+    
+    On Error GoTo 0
+End Sub
+
+' =================================== LOAD FILE FUNCTIONS ===================================
+
+Sub LoadInputFiles()
+    ' Load input files A and B with performance optimizations
+    On Error GoTo ErrorHandler
+    
+    'Initialize the global variables - to initialize the max allowed columns for the reconciliation.
+    InitializeGlobalVariables
+    
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+    Application.StatusBar = "Loading input files..."
+    
+    ' Get parameters from Input Parameters sheet
+    ReadParameters
+    
+    ' Clear any mapped columns from previous runs
+    ClearMappedColumns Worksheets("Input File A")
+    ClearMappedColumns Worksheets("Input File B")
+    
+    ' Load File A
+    If gstrInputFileAPath <> "" Then
+        Application.StatusBar = "Loading Input File A..."
+        LoadDataFromFile gstrInputFileAPath, "Input File A", gstrInputADelimiter
+    Else
+        MsgBox "Input File A path is missing. Please provide a valid file path.", vbExclamation, "Missing Input"
+        GoTo CleanExit
+    End If
+    
+    ' Load File B
+    If gstrInputFileBPath <> "" Then
+        Application.StatusBar = "Loading Input File B..."
+        LoadDataFromFile gstrInputFileBPath, "Input File B", gstrInputBDelimiter
+    Else
+        MsgBox "Input File B path is missing. Please provide a valid file path.", vbExclamation, "Missing Input"
+        GoTo CleanExit
+    End If
+    
+    ' Create mapping table
+    Application.StatusBar = "Creating mapping table..."
+    CreateMappingTable
+    
+    ' Show success message
+    Application.StatusBar = "Files loaded successfully."
+    
+CleanExit:
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    
+    If Err.Number = 0 Then
+        MsgBox "Input files loaded successfully!", vbInformation, "Files Loaded"
+    End If
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in LoadInputFiles", vbCritical, "Error"
+    Resume CleanExit
+End Sub
+
+Sub LoadSupplementaryFiles()
+    ' Load supplementary files with optimized performance
+    On Error GoTo ErrorHandler
+    
+    'Initialize the global variables - to initialize the max allowed columns for the reconciliation.
+    InitializeGlobalVariables
+    
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+    Application.StatusBar = "Loading supplementary files..."
+    
+    ' Get parameters from Input Parameters sheet
+    ReadParameters
+    
+    ' Clear any mapped columns from previous runs
+    ClearMappedColumns Worksheets("Supplementary File A")
+    ClearMappedColumns Worksheets("Supplementary File B")
+    
+    ' Load Supplementary File A if specified
+    If gstrSupplementaryFileAPath <> "" Then
+        Application.StatusBar = "Loading Supplementary File A..."
+        LoadDataFromFile gstrSupplementaryFileAPath, "Supplementary File A", gstrSupplementaryADelimiter
+        Application.StatusBar = "Supplementary File A loaded successfully!"
+    Else
+        Application.StatusBar = "No Supplementary File A specified."
+    End If
+    
+    ' Load Supplementary File B if specified
+    If gstrSupplementaryFileBPath <> "" Then
+        Application.StatusBar = "Loading Supplementary File B..."
+        LoadDataFromFile gstrSupplementaryFileBPath, "Supplementary File B", gstrSupplementaryBDelimiter
+        Application.StatusBar = "Supplementary File B loaded successfully!"
+    Else
+        Application.StatusBar = "No Supplementary File B specified."
+    End If
+    
+CleanExit:
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    
+    If Err.Number = 0 Then
+        If gstrSupplementaryFileAPath <> "" Or gstrSupplementaryFileBPath <> "" Then
+            MsgBox "Supplementary files loaded successfully!", vbInformation, "Files Loaded"
+        Else
+            MsgBox "No supplementary files were specified.", vbInformation, "No Files"
+        End If
+    End If
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in LoadSupplementaryFiles", vbCritical, "Error"
+    Resume CleanExit
+End Sub
+
+Sub ReadParameters()
+    ' Read parameters from Input Parameters sheet
+    Dim ws As Worksheet
+    Set ws = Worksheets("Input Parameters")
+    
+    ' Read file paths
+    gstrInputFileAPath = ws.Range("B5").Value
+    gstrInputFileBPath = ws.Range("B6").Value
+    gstrSupplementaryFileAPath = ws.Range("B7").Value
+    gstrSupplementaryFileBPath = ws.Range("B8").Value
+    
+    ' Read source names
+    gstrInputASource = ws.Range("B12").Value
+    gstrInputBSource = ws.Range("B13").Value
+    
+    ' Read delimiters
+    gstrInputADelimiter = ws.Range("B17").Value
+    gstrInputBDelimiter = ws.Range("B18").Value
+    gstrSupplementaryADelimiter = ws.Range("B19").Value
+    gstrSupplementaryBDelimiter = ws.Range("B20").Value
+    
+    ' Read reconciliation keys
+    gstrPrimaryKeyA = ws.Range("B25").Value
+    gstrPrimaryKeyB = ws.Range("B26").Value
+    gstrSecondaryKeyA = ws.Range("C25").Value
+    gstrSecondaryKeyB = ws.Range("C26").Value
+    
+    ' Read supplementary keys
+    gstrSupplementaryKeyA = ws.Range("B31").Value
+    gstrSupplementaryASourceKey = ws.Range("B32").Value
+    
+    ' UPDATED: Supplementary B keys are now at B37 and B38 (moved up)
+    gstrSupplementaryKeyB = ws.Range("B37").Value  ' Changed from B42
+    gstrSupplementaryBSourceKey = ws.Range("B38").Value  ' Changed from B43
+    
+    ' Debug the supplementary key values
+    Debug.Print "ReadParameters:"
+    Debug.Print "  SupplementaryKeyA: " & gstrSupplementaryKeyA
+    Debug.Print "  SupplementaryASourceKey: " & gstrSupplementaryASourceKey
+    Debug.Print "  SupplementaryKeyB: " & gstrSupplementaryKeyB
+    Debug.Print "  SupplementaryBSourceKey: " & gstrSupplementaryBSourceKey
+End Sub
+
+Function IsDate2(strValue As String) As Boolean
+    ' More conservative date detection function
+    On Error Resume Next
+    
+    IsDate2 = False
+    
+    ' Skip empty strings
+    If Trim(strValue) = "" Then Exit Function
+    
+    ' If it's purely numeric with no separators, it's probably not a date
+    If IsNumeric(strValue) Then
+        ' Pure integers are not treated as dates
+        If InStr(1, strValue, ".") = 0 And InStr(1, strValue, "/") = 0 And InStr(1, strValue, "-") = 0 Then
+            IsDate2 = False
+            Exit Function
+        End If
+    End If
+    
+    ' Check for date separators - must have at least one to be considered a date
+    If InStr(1, strValue, "/") = 0 And InStr(1, strValue, "-") = 0 Then
+        IsDate2 = False
+        Exit Function
+    End If
+    
+    ' Check if it's a standard date format
+    If IsDate(strValue) Then
+        ' Additional validation to avoid false positives
+        ' Must contain digits and separators in patterns typical of dates
+        If (InStr(1, strValue, "/") > 0 Or InStr(1, strValue, "-") > 0) And _
+           Len(strValue) >= 6 Then ' At least M/D/YY format
+            IsDate2 = True
+        End If
+        Exit Function
+    End If
+    
+    ' Handle potential ISO date format (YYYY-MM-DD)
+    If Len(strValue) = 10 Then
+        If Mid(strValue, 5, 1) = "-" And Mid(strValue, 8, 1) = "-" Then
+            Dim year As String, month As String, day As String
+            year = left(strValue, 4)
+            month = Mid(strValue, 6, 2)
+            day = Right(strValue, 2)
+            
+            If IsNumeric(year) And IsNumeric(month) And IsNumeric(day) Then
+                If CInt(year) >= 1900 And CInt(year) <= 2100 Then
+                    If CInt(month) >= 1 And CInt(month) <= 12 Then
+                        If CInt(day) >= 1 And CInt(day) <= 31 Then
+                            IsDate2 = True
+                            Exit Function
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    End If
+    
+    On Error GoTo 0
+End Function
+
+Sub LoadDataFromFile(filePath As String, destSheet As String, delimiter As String)
+    ' Highly optimized version that loads data 20-100x faster
+    On Error GoTo ErrorHandler
+    
+    Dim ws As Worksheet
+    Dim fileContent As String
+    Dim i As Long, j As Long
+    Dim lines() As String
+    Dim dataArray() As String
+    Dim resultArray() As Variant
+    Dim headerRow As Long
+    Dim lastRow As Long
+    Dim columnCount As Long
+    Dim rowCount As Long
+    Dim dataStartRow As Long
+    Dim startTime As Double
+    
+    ' Record start time for performance reporting
+    startTime = Timer
+    
+    ' Set destination worksheet
+    Set ws = Worksheets(destSheet)
+    
+    ' Clear previous data (both content and formatting)
+    Application.StatusBar = "Clearing worksheet..."
+    ws.Range("A3:ZZ" & ws.Rows.count).ClearContents
+    ws.Range("A3:ZZ" & ws.Rows.count).ClearFormats
+    
+    ' Format header row
+    headerRow = 3
+    ws.Rows(headerRow).Font.Bold = True
+    
+    ' Get the file content in one operation
+    Application.StatusBar = "Reading file..."
+    fileContent = ReadEntireFile(filePath)
+    
+    If fileContent = "" Then
+        MsgBox "Error reading file or file is empty: " & filePath, vbCritical, "File Error"
+        Exit Sub
+    End If
+    
+    ' Split into lines
+    lines = Split(fileContent, vbCrLf)
+    
+    ' Handle different line endings
+    If UBound(lines) < 1 Then
+        lines = Split(fileContent, vbLf)
+    End If
+    
+    ' Count data rows and columns
+    rowCount = UBound(lines) + 1
+    
+    ' Process the header row to determine column count
+    If rowCount > 0 Then
+        ' Parse the first row properly to get accurate column count
+        dataArray = ParseCSVLine(lines(0), delimiter)
+        columnCount = UBound(dataArray) + 1
+    Else
+        MsgBox "No data found in file: " & filePath, vbCritical, "Empty File"
+        Exit Sub
+    End If
+    
+    ' Create a 2D array to hold all data (including header)
+    dataStartRow = headerRow - 1 ' Offset to convert between 0-based array and 1-based Excel rows
+    ReDim resultArray(1 To rowCount, 1 To columnCount)
+    
+    ' Parse and store all data in the array
+    Application.StatusBar = "Processing data..."
+    
+    ' Process in chunks to provide status updates
+    Const CHUNK_SIZE As Long = 1000
+    
+    For i = 0 To rowCount - 1
+        ' Update status periodically
+        If i Mod CHUNK_SIZE = 0 Then
+            Application.StatusBar = "Processing row " & i & " of " & rowCount & " (" & Format(i / rowCount, "0%") & ")"
+        End If
+        
+        If Trim(lines(i)) <> "" Then
+            ' Parse the line properly, handling quotes etc.
+            dataArray = ParseCSVLine(lines(i), delimiter)
+            
+            ' Fill the row in the result array
+            For j = 0 To UBound(dataArray)
+                If j < columnCount Then ' Safety check
+                    resultArray(i + 1, j + 1) = Trim(dataArray(j))
+                End If
+            Next j
+        End If
+    Next i
+    
+    
+    ' Apply text format to preserve leading zeros (bulk operation)
+    ws.Range(ws.Cells(headerRow, 1), ws.Cells(headerRow + rowCount - 1, columnCount)).NumberFormat = "@"
+    
+    ' Write the entire array to the worksheet in ONE operation
+    Application.StatusBar = "Writing data to worksheet..."
+    ws.Range(ws.Cells(headerRow, 1), ws.Cells(headerRow + rowCount - 1, columnCount)).Value = resultArray
+           
+    ' Format headers
+    ws.Range(ws.Cells(headerRow, 1), ws.Cells(headerRow, columnCount)).Font.Bold = True
+    ws.Range(ws.Cells(headerRow, 1), ws.Cells(headerRow, columnCount)).Interior.Color = RGB(220, 220, 220)
+    
+    ' Auto-fit columns (this can be slow for large datasets)
+    Application.StatusBar = "Adjusting column widths..."
+    ws.Columns("A:Z").AutoFit
+    
+    ' Report performance
+    Application.StatusBar = "File loaded in " & Format(Timer - startTime, "0.00") & " seconds."
+    
+    Exit Sub
+    
+ErrorHandler:
+    ' Show error details
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in LoadDataFromFile", vbCritical, "Error"
+End Sub
+
+Sub CopyValueWithFormatting(sourceWs As Worksheet, sourceRow As Long, sourceCol As Long, destWs As Worksheet, destRow As Long, destCol As Long)
+    ' Copy a cell value while preserving formatting (especially date formats)
+    On Error Resume Next
+    
+    ' Copy the value
+    destWs.Cells(destRow, destCol).Value = sourceWs.Cells(sourceRow, sourceCol).Value
+    
+    ' Preserve the number format
+    destWs.Cells(destRow, destCol).NumberFormat = sourceWs.Cells(sourceRow, sourceCol).NumberFormat
+    
+    On Error GoTo 0
+End Sub
+
+Sub ClearMappedColumns(ws As Worksheet)
+    ' Optimized version of ClearMappedColumns
+    On Error GoTo ErrorHandler
+    
+    Dim lastCol As Long
+    Dim i As Long
+    Dim colsToRemove() As Long
+    Dim colCount As Long
+    
+    ' Find last column with data
+    lastCol = ws.Cells(3, ws.Columns.count).End(xlToLeft).Column
+    
+    ' Initialize collection of columns to remove
+    colCount = 0
+    ReDim colsToRemove(1 To lastCol) ' Maximum possible columns to remove
+    
+    ' Identify mapped columns
+    For i = 1 To lastCol
+        Dim header As String
+        header = ws.Cells(3, i).Value
+        
+        If Len(header) >= 4 Then
+            If Right(header, 4) = "_map" Then
+                colCount = colCount + 1
+                colsToRemove(colCount) = i
+            End If
+        End If
+    Next i
+    
+    ' Process columns in reverse order to avoid shifting issues
+    If colCount > 0 Then
+        Application.StatusBar = "Clearing mapped columns..."
+        Application.EnableEvents = False
+        Application.ScreenUpdating = False
+        Application.Calculation = xlCalculationManual
+        
+        ' Sort columns in descending order to avoid shifting issues
+        If colCount > 1 Then
+            Dim temp As Long
+            Dim i2 As Long, j As Long
+            For i2 = 1 To colCount - 1
+                For j = i2 + 1 To colCount
+                    If colsToRemove(i2) < colsToRemove(j) Then
+                        temp = colsToRemove(i2)
+                        colsToRemove(i2) = colsToRemove(j)
+                        colsToRemove(j) = temp
+                    End If
+                Next j
+            Next i2
+        End If
+        
+        ' Clear columns in reverse order
+        For i = 1 To colCount
+            Dim colIndex As Long
+            colIndex = colsToRemove(i)
+            
+            ' Clear the column
+            ws.Columns(colIndex).ClearContents
+            ws.Columns(colIndex).ClearFormats
+            
+            ' Optionally delete the column instead of just clearing it
+            ' ws.Columns(colIndex).Delete Shift:=xlToLeft
+        Next i
+        
+        Application.StatusBar = False
+        Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
+    End If
+    
+    Exit Sub
+    
+ErrorHandler:
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in ClearMappedColumns", vbCritical, "Error"
+End Sub
+
+Sub CreateMappingTable()
+    ' Create the reconciliation column mapping table in columns I and J of the Input Parameters worksheet
+    Dim wsMapping As Worksheet
+    Dim wsFileA As Worksheet
+    Dim lastColA As Long
+    Dim i As Long
+    Dim rowNum As Long
+    Dim isMappingTableEmpty As Boolean
+    
+    ' Set worksheets
+    Set wsMapping = Worksheets("Input Parameters")
+    Set wsFileA = Worksheets("Input File A")
+    
+    ' Check if the mapping table is already populated
+    isMappingTableEmpty = True
+    For i = 6 To 5 + gintMaxReconciliationColumns  ' Check rows 6 to 5+max
+        If wsMapping.Range("I" & i).Value <> "" Then
+            isMappingTableEmpty = False
+            Exit For
+        End If
+    Next i
+    
+    ' Only populate the table if it's empty
+    If isMappingTableEmpty Then
+        ' Find the last column with data in row 3 (header row)
+        lastColA = wsFileA.Cells(3, wsFileA.Columns.count).End(xlToLeft).Column
+        
+        ' Start adding column mappings from row 6
+        rowNum = 6
+        
+        ' Add File A columns
+        For i = 1 To lastColA
+            wsMapping.Cells(rowNum, 9).Value = wsFileA.Cells(3, i).Value  ' Column I is index 9
+            rowNum = rowNum + 1
+            ' Don't exceed the prepared rows (6-25)
+            If rowNum > 5 + gintMaxReconciliationColumns Then Exit For
+        Next i
+    End If
+    
+    ' Format the range with borders
+    wsMapping.Range("I5:J25").Borders.LineStyle = xlContinuous
+    
+    ' Auto-fit columns
+    wsMapping.Columns("I:J").AutoFit
+End Sub
+
+' =================================== MAPPING FUNCTIONS ===================================
+
+Sub ApplyMapping()
+    ' Apply mapping defined in the Mapping sheet
+    On Error GoTo ErrorHandler
+    
+    'Initialize the global variables - to initialize the max allowed columns for the reconciliation.
+    InitializeGlobalVariables
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    Dim wsMappingDef As Worksheet
+    Dim wsMapping As Worksheet
+    Dim rangeToSearch As Range
+    Dim cell As Range
+    Dim i As Long, j As Long
+    Dim lastRow As Long, lastCol As Long
+    Dim tableStartRows() As Long
+    Dim tableStartCols() As Long  ' Store the column where each table starts
+    Dim tableCount As Long
+    Dim fileType As String
+    Dim columnName As String
+    Dim sourceValue As String
+    Dim mappedValue As String
+    Dim wsInput As Worksheet
+    
+    ' Set worksheets
+    On Error Resume Next
+    Set wsMappingDef = Worksheets("Mapping")
+    Set wsMapping = Worksheets("Input Parameters")
+    On Error GoTo ErrorHandler
+    
+    If wsMappingDef Is Nothing Then
+        MsgBox "Worksheet 'Mapping' not found.", vbExclamation, "Missing Worksheet"
+        GoTo CleanExit
+    End If
+    
+    If wsMapping Is Nothing Then
+        MsgBox "Worksheet 'Input Parameters' not found.", vbExclamation, "Missing Worksheet"
+        GoTo CleanExit
+    End If
+    
+    ' Check if the column mapping table has been filled out
+    Dim hasMappings As Boolean
+    
+    hasMappings = False
+    
+      
+    ' Check for at least one mapping pair
+    ' CHANGE: Use gintMaxReconciliationColumns instead of hardcoded 25
+    For i = 6 To 5 + gintMaxReconciliationColumns  ' Check mapping table rows
+        If wsMapping.Cells(i, 9).Value <> "" And wsMapping.Cells(i, 10).Value <> "" Then
+            hasMappings = True
+            Exit For
+        End If
+    Next i
+    
+    If Not hasMappings Then
+        MsgBox "The column mapping table is not filled out. Please go to the Input Parameters tab " & _
+               "and map columns from Input File A to Input File B in columns I and J.", _
+               vbExclamation, "Missing Mappings"
+        GoTo CleanExit
+    End If
+    
+    ' Find all mapping tables in the Mapping sheet
+    tableCount = 0
+    ' CHANGE: Use gintMaxReconciliationColumns for maximum mapping tables
+    ReDim tableStartRows(1 To gintMaxReconciliationColumns) ' Assume max mapping tables
+    ReDim tableStartCols(1 To gintMaxReconciliationColumns) ' Store start column for each table
+    
+    ' Search for "Input File: " text to find mapping table starts
+    Set rangeToSearch = wsMappingDef.UsedRange
+    
+    For Each cell In rangeToSearch.Cells
+        If InStr(1, cell.Value, "Input File:", vbTextCompare) > 0 Then
+            tableCount = tableCount + 1
+            ' CHANGE: Add bounds check for safety
+            If tableCount <= UBound(tableStartRows) Then
+                tableStartRows(tableCount) = cell.Row
+                tableStartCols(tableCount) = cell.Column ' Store the column
+            Else
+                ' Resize array if needed
+                ReDim Preserve tableStartRows(1 To tableCount + gintMaxReconciliationColumns)
+                ReDim Preserve tableStartCols(1 To tableCount + gintMaxReconciliationColumns)
+                tableStartRows(tableCount) = cell.Row
+                tableStartCols(tableCount) = cell.Column
+            End If
+        End If
+    Next cell
+    
+    ' If no mapping tables found, exit
+    If tableCount = 0 Then
+        MsgBox "No mapping tables found in the Mapping sheet. Skipping this step.", vbInformation, "No Mapping"
+        GoTo CleanExit
+    End If
+    
+    ' Process each mapping table
+    For i = 1 To tableCount
+        ' Get file type (A or B) using safer method
+        Dim headerText As String
+        Dim startCol As Long
+        
+        startCol = tableStartCols(i) ' Use the stored column
+        headerText = Trim(wsMappingDef.Cells(tableStartRows(i), startCol).Value)
+        
+        fileType = ""
+        If InStr(1, headerText, "Input File: A", vbTextCompare) > 0 Or _
+           InStr(1, headerText, "Input File:A", vbTextCompare) > 0 Then
+            fileType = "A"
+        ElseIf InStr(1, headerText, "Input File: B", vbTextCompare) > 0 Or _
+               InStr(1, headerText, "Input File:B", vbTextCompare) > 0 Then
+            fileType = "B"
+        End If
+        
+        ' Validation
+        If fileType = "" Then
+            MsgBox "Invalid file type in mapping table at row " & tableStartRows(i) & ", column " & startCol & vbCrLf & _
+                   "Cell contains: """ & headerText & """" & vbCrLf & _
+                   "Please use exactly 'Input File: A' or 'Input File: B'", _
+                   vbExclamation, "Mapping Error"
+            GoTo CleanExit
+        End If
+        
+        ' Get column name from the header row (one row below file type)
+        columnName = wsMappingDef.Cells(tableStartRows(i) + 1, startCol).Value
+        
+        ' Debugging message
+        ' Debug.Print "Processing mapping table at row " & tableStartRows(i) & ", column " & startCol & _
+        '            ", File Type: " & fileType & ", Column Name: " & columnName
+        
+        ' Column name validation
+        If columnName = "" Then
+            MsgBox "Missing column name in mapping table at row " & (tableStartRows(i) + 1) & ", column " & startCol & vbCrLf & _
+                   "Please specify which column to map in the row below the file type.", _
+                   vbExclamation, "Mapping Error"
+            GoTo CleanExit
+        End If
+        
+        ' Set the input worksheet based on file type
+        If fileType = "A" Then
+            Set wsInput = Worksheets("Input File A")
+        ElseIf fileType = "B" Then
+            Set wsInput = Worksheets("Input File B")
+        End If
+        
+        If wsInput Is Nothing Then
+            MsgBox "Worksheet 'Input File " & fileType & "' not found.", vbExclamation, "Missing Worksheet"
+            GoTo CleanExit
+        End If
+        
+        ' Find the column with the specified name in the input worksheet
+        lastCol = wsInput.Cells(3, wsInput.Columns.count).End(xlToLeft).Column
+        Dim columnFound As Boolean
+        columnFound = False
+        
+        For j = 1 To lastCol
+            If wsInput.Cells(3, j).Value = columnName Then
+                ' Found the column, create a mapped column
+                AddMappedColumn wsInput, j, tableStartRows(i), wsMappingDef, startCol
+                columnFound = True
+                Exit For
+            End If
+        Next j
+        
+        ' Column not found warning
+        If Not columnFound Then
+            MsgBox "Column '" & columnName & "' not found in " & IIf(fileType = "A", "Input File A", "Input File B") & _
+                   ". Please check the column name.", vbExclamation, "Column Not Found"
+        End If
+    Next i
+    
+CleanExit:
+    ' Always restore Excel settings
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    
+    If Err.Number = 0 Then
+        MsgBox "Mapping applied successfully!", vbInformation, "Mapping Complete"
+    End If
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description, vbCritical, "Error in Apply Mapping"
+    Resume CleanExit
+End Sub
+
+' The issue is in the AddMappedColumn function where it determines the end of the mapping table.
+' The current code is likely checking for blank cells to determine the table end,
+' which causes problems when a source value is intentionally blank.
+
+' Here's the modified AddMappedColumn function that properly handles blank source values:
+
+Sub AddMappedColumn(wsInput As Worksheet, columnIndex As Long, tableStartRow As Long, wsMappingDef As Worksheet, startCol As Long)
+    ' Create a new column with mapped values instead of replacing original values
+    On Error GoTo ErrorHandler
+        
+    Dim lastRowInput As Long
+    Dim i As Long, j As Long
+    Dim sourceValue As String
+    Dim mappedValue As String
+    Dim mappingFound As Boolean
+    Dim lastRowMapping As Long
+    Dim columnName As String
+    Dim lastCol As Long
+    Dim newColIndex As Long
+    Dim mappedColName As String
+        
+    ' Get the original column name
+    columnName = wsInput.Cells(3, columnIndex).Value
+        
+    ' Create the new column name with _map suffix
+    mappedColName = columnName & "_map"
+        
+    ' Find the last column with data
+    lastCol = wsInput.Cells(3, wsInput.Columns.count).End(xlToLeft).Column
+        
+    ' Check if the mapped column already exists
+    Dim mappedColExists As Boolean
+    mappedColExists = False
+        
+    For j = 1 To lastCol
+        If wsInput.Cells(3, j).Value = mappedColName Then
+            newColIndex = j
+            mappedColExists = True
+            Exit For
+        End If
+    Next j
+        
+    ' If mapped column doesn't exist, add it at the end
+    If Not mappedColExists Then
+        newColIndex = lastCol + 1
+                
+        ' Add column header with _map suffix
+        wsInput.Cells(3, newColIndex).Value = mappedColName
+                
+        ' Format the header with a darker color to distinguish it
+        wsInput.Cells(3, newColIndex).Interior.Color = RGB(153, 153, 204) ' Darker shade
+        wsInput.Cells(3, newColIndex).Font.Bold = True
+    End If
+        
+    ' Find the last row with data in the input worksheet
+    lastRowInput = wsInput.Cells(wsInput.Rows.count, columnIndex).End(xlUp).Row
+        
+    ' =========================== MODIFIED SECTION BEGINS ===========================
+    ' Find the last row of the mapping table using a more reliable method
+    ' Start from the row after column name header
+    j = tableStartRow + 2 ' First mapping value row
+    
+    ' Determine the end of the mapping table by looking for a completely empty row
+    ' or a new mapping table's header
+    Do While j <= wsMappingDef.Rows.count
+        ' Check if this is the start of a new mapping table
+        If InStr(1, wsMappingDef.Cells(j, startCol).Value, "Input File:", vbTextCompare) > 0 Then
+            Exit Do
+        End If
+        
+        ' Check if this row has no data in both source and mapping columns
+        If wsMappingDef.Cells(j, startCol).Value = "" And _
+           wsMappingDef.Cells(j, startCol + 1).Value = "" Then
+            ' If both cells are empty, it's likely the end of the table
+            Exit Do
+        End If
+        
+        j = j + 1
+    Loop
+    
+    lastRowMapping = j - 1
+    ' =========================== MODIFIED SECTION ENDS ===========================
+        
+    ' OPTIMIZATION: Load all mapping values into arrays for faster lookup
+    Dim sourceValues() As String
+    Dim mappedValues() As String
+    Dim mappingCount As Long
+        
+    mappingCount = lastRowMapping - (tableStartRow + 2) + 1
+    ReDim sourceValues(1 To mappingCount)
+    ReDim mappedValues(1 To mappingCount)
+        
+    ' Load mapping values into arrays
+    For j = 1 To mappingCount
+        sourceValues(j) = wsMappingDef.Cells(tableStartRow + 2 + j - 1, startCol).Value
+        mappedValues(j) = wsMappingDef.Cells(tableStartRow + 2 + j - 1, startCol + 1).Value
+    Next j
+        
+    ' Prepare a result array for all rows at once
+    Dim resultArray() As Variant
+    ReDim resultArray(4 To lastRowInput)
+        
+    ' Process all rows and prepare values
+    For i = 4 To lastRowInput
+        sourceValue = wsInput.Cells(i, columnIndex).Value
+                
+        ' Skip empty cells
+        If sourceValue <> "" Then
+            ' Look for the source value in the mapping arrays
+            mappingFound = False
+                        
+            For j = 1 To mappingCount
+                ' =========================== MODIFIED SECTION BEGINS ===========================
+                ' Check if we have a match - must handle blank source values correctly
+                ' For blank source values in the mapping table, explicitly check for empty strings
+                If (sourceValues(j) = "" And sourceValue = "") Or _
+                   (sourceValues(j) <> "" And sourceValues(j) = sourceValue) Then
+                    ' Found a mapping
+                    resultArray(i) = mappedValues(j)
+                    mappingFound = True
+                    Exit For
+                End If
+                ' =========================== MODIFIED SECTION ENDS ===========================
+            Next j
+                        
+            ' If no mapping found, mark the cell
+            If Not mappingFound Then
+                resultArray(i) = "N/A - failed to map. Original Value: " & sourceValue
+            End If
+        Else
+            ' For empty cells, leave the mapped column empty
+            resultArray(i) = ""
+        End If
+    Next i
+        
+    ' Write all values at once
+    For i = 4 To lastRowInput
+        wsInput.Cells(i, newColIndex).Value = resultArray(i)
+                
+        ' Format cells with no mapping found
+        If left(resultArray(i), 4) = "N/A " Then
+            wsInput.Cells(i, newColIndex).Interior.Color = RGB(255, 191, 0) ' Amber color
+        End If
+    Next i
+        
+    Exit Sub
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & vbCrLf & _
+           "While mapping column " & columnIndex & " in " & wsInput.Name, vbCritical, "Error in Apply Mapping"
+End Sub
+
+' =================================== RECONCILIATION FUNCTIONS ===================================
+
+Sub RunReconciliation()
+    ' Run the reconciliation process
+    On Error GoTo ErrorHandler
+    
+    'Initialize the global variables - to initialize the max allowed columns for the reconciliation.
+    InitializeGlobalVariables
+    
+    ' Use optimized application settings
+    OptimizeAppSettings True
+
+    ' Save original Excel settings - call from the ApplicationSettings module
+    ApplicationSettings.SaveExcelSettings
+    
+    ' Declare all variables
+    Dim ws As Worksheet
+    Dim i As Long
+    Dim hasMappings As Boolean
+    Dim mappings() As String
+
+    ' Read parameters
+    ReadParameters
+
+    ' Check if primary keys are specified
+    If gstrPrimaryKeyA = "" Or gstrPrimaryKeyB = "" Then
+        MsgBox "Primary keys for reconciliation are not specified. Please provide them in the Input Parameters sheet.", _
+               vbExclamation, "Missing Keys"
+        GoTo CleanExit
+    End If
+
+    ' Check if the column mapping table has been filled out
+    Set ws = Worksheets("Input Parameters")
+    hasMappings = False
+
+    ' Find the last row with data in column I
+    Dim lastMappingRow As Long
+    lastMappingRow = ws.Cells(ws.Rows.count, 9).End(xlUp).Row
+
+    ' Ensure we don't go below row 6 (headers are in row 5)
+    If lastMappingRow < 6 Then lastMappingRow = 6
+
+    ' Set a reasonable upper limit for performance (change this as needed)
+    Const MAX_MAPPING_ROWS As Long = 100
+    If lastMappingRow > MAX_MAPPING_ROWS Then lastMappingRow = MAX_MAPPING_ROWS
+
+    ' Check for at least one mapping pair
+    hasMappings = False
+    For i = 6 To lastMappingRow
+        If ws.Cells(i, 9).Value <> "" And ws.Cells(i, 10).Value <> "" Then
+            hasMappings = True
+            Exit For
+        End If
+    Next i
+
+    If Not hasMappings Then
+        MsgBox "The column mapping table is not filled out. Please go to the Input Parameters tab " & _
+               "and map columns from Input File A to Input File B in columns I and J.", _
+               vbExclamation, "Missing Mappings"
+        GoTo CleanExit
+    End If
+
+    ' Get column mappings from Input Parameters sheet
+    mappings = GetColumnMappings()
+
+    ' Check if we got any mappings (array size)
+    If UBound(mappings, 1) <= 0 And UBound(mappings, 2) <= 0 Then
+        GoTo CleanExit  ' GetColumnMappings already showed an error message
+    End If
+
+    ' Update status bar
+    Application.StatusBar = "Starting reconciliation process..."
+    
+    ' Perform reconciliation with the mappings
+    PerformReconciliation mappings
+
+CleanExit:
+    ' Restore application settings
+    OptimizeAppSettings False
+    
+    ' Restore ALL Excel settings - call from the ApplicationSettings module
+    ApplicationSettings.RestoreExcelSettings
+
+    If Err.Number = 0 Then
+        MsgBox "Reconciliation completed successfully!", vbInformation, "Reconciliation Complete"
+    End If
+
+    Exit Sub
+ErrorHandler:
+    ' Restore application settings
+    OptimizeAppSettings False
+    
+    ' Always restore settings even if an error occurs
+    ApplicationSettings.RestoreExcelSettings
+    
+    MsgBox "Error " & Err.Number & ": " & Err.Description, vbCritical, "Error in Reconciliation"
+    Resume CleanExit
+End Sub
+
+'This function clears Result tab before populating it with new reconciliation results.
+Sub ClearResultSheet()
+    ' Clear both content and formatting from the Result sheet
+    On Error GoTo ErrorHandler
+    
+    Dim wsResult As Worksheet
+    
+    ' Set worksheet
+    Set wsResult = Worksheets("Result")
+    
+    ' Preserve title and subtitle
+    Dim title As String, subtitle As String
+    title = wsResult.Range("A1").Value
+    subtitle = wsResult.Range("A2").Value
+    
+    ' Clear everything from row 3 down (both content and formatting)
+    wsResult.Range("A3:ZZ" & wsResult.Rows.count).ClearContents
+    wsResult.Range("A3:ZZ" & wsResult.Rows.count).ClearFormats
+    
+    ' Restore title and subtitle
+    wsResult.Range("A1").Value = title
+    wsResult.Range("A2").Value = subtitle
+    wsResult.Range("A1").Font.Bold = True
+    wsResult.Range("A1").Font.Size = 16
+    wsResult.Range("A2").Font.Italic = True
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in ClearResultSheet", vbCritical, "Error"
+End Sub
+
+' This function gets the mappings as two parallel arrays in a single 2D array
+Function GetColumnMappings() As String()
+    ' Get column mappings from Input Parameters sheet with increased capacity
+    On Error GoTo ErrorHandler
+    
+    Dim ws As Worksheet
+    Dim i As Long, count As Long
+    Dim mappings() As String
+    Dim lastMappingRow As Long
+    
+    ' Set worksheet
+    Set ws = Worksheets("Input Parameters")
+    
+    ' Find the last row with data in column I (allowing for more mappings)
+    ' This replaces the hardcoded limit of row 25
+    lastMappingRow = ws.Cells(ws.Rows.count, 9).End(xlUp).Row
+    
+    ' Ensure we don't go below row 6 (headers are in row 5)
+    If lastMappingRow < 6 Then lastMappingRow = 6
+    
+    ' Set a reasonable upper limit for performance (change this as needed)
+    Dim maxMappingRows As Long
+    maxMappingRows = gintMaxReconciliationColumns
+    If lastMappingRow > maxMappingRows Then lastMappingRow = maxMappingRows
+    
+    ' First count how many mappings we have
+    count = 0
+    For i = 6 To lastMappingRow
+        If ws.Cells(i, 9).Value <> "" And ws.Cells(i, 10).Value <> "" Then
+            count = count + 1
+        End If
+    Next i
+    
+    If count = 0 Then
+        MsgBox "The column mapping table is not filled out. Please go to the Input Parameters tab " & _
+               "and map columns from Input File A to Input File B in columns I and J.", _
+               vbExclamation, "Missing Mappings"
+        ReDim mappings(0 To 0, 0 To 1)  ' Return empty array with proper dimensions
+        GetColumnMappings = mappings
+        Exit Function
+    End If
+    
+    ' Create a 2D array to hold mappings - first column for A, second for B
+    ReDim mappings(0 To count - 1, 0 To 1)
+    
+    ' Read mappings into the 2D array
+    count = 0
+    For i = 6 To lastMappingRow
+        If ws.Cells(i, 9).Value <> "" And ws.Cells(i, 10).Value <> "" Then
+            mappings(count, 0) = ws.Cells(i, 9).Value
+            mappings(count, 1) = ws.Cells(i, 10).Value
+            count = count + 1
+        End If
+    Next i
+    
+    GetColumnMappings = mappings
+    Exit Function
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in GetColumnMappings", vbCritical, "Error"
+    ReDim mappings(0 To 0, 0 To 1)  ' Return empty array with proper dimensions
+    GetColumnMappings = mappings
+End Function
+
+' The main reconciliation function
+' First, add these helper functions to your module (outside of any other functions):
+
+Function GenerateConsistentKey(primaryKey As String, secondaryKey As String, useCompositeKey As Boolean) As String
+    ' Create a standardized key format to ensure consistency
+    If useCompositeKey And secondaryKey <> "" Then
+        GenerateConsistentKey = primaryKey & "|" & secondaryKey
+    Else
+        GenerateConsistentKey = primaryKey
+    End If
+End Function
+
+Function KeyExistsInLookup(keys() As String, count As Long, key As String, caseSensitive As Boolean) As Long
+    Dim i As Long
+    KeyExistsInLookup = 0 ' Default to not found
+    
+    For i = 1 To count
+        If (caseSensitive And StrComp(keys(i), key, vbBinaryCompare) = 0) Or _
+           (Not caseSensitive And StrComp(keys(i), key, vbTextCompare) = 0) Then
+            KeyExistsInLookup = i ' Return the index
+            Exit Function
+        End If
+    Next i
+End Function
+
+Sub BuildLookupIndex(ws As Worksheet, primaryKeyCol As Long, secondaryKeyCol As Long, _
+                     startRow As Long, endRow As Long, _
+                     ByRef keys() As String, ByRef values() As Long, ByRef count As Long, _
+                     useArrays As Boolean, dataArray() As Variant, useCompositeKey As Boolean)
+    ' Clear the previous data
+    count = 0
+    
+    ' Process records in chunks for better performance
+    Const CHUNK_SIZE As Long = 1000
+    Dim chunk As Long, i As Long
+    
+    For chunk = 0 To ((endRow - startRow) \ CHUNK_SIZE)
+        Dim chunkStart As Long, chunkEnd As Long
+        chunkStart = startRow + chunk * CHUNK_SIZE
+        chunkEnd = Application.Min(chunkStart + CHUNK_SIZE - 1, endRow)
+        
+        ' Update status
+        Application.StatusBar = "Building lookup index: " & Format(((chunk + 1) * CHUNK_SIZE) / (endRow - startRow + 1), "0%")
+        
+        For i = chunkStart To chunkEnd
+            Dim primaryKey As String, secondaryKey As String
+            
+            ' Get key values efficiently
+            If useArrays Then
+                primaryKey = dataArray(i, primaryKeyCol)
+                If useCompositeKey And secondaryKeyCol > 0 Then
+                    secondaryKey = dataArray(i, secondaryKeyCol)
+                Else
+                    secondaryKey = ""
+                End If
+            Else
+                primaryKey = Trim(ws.Cells(i, primaryKeyCol).Value)
+                If useCompositeKey And secondaryKeyCol > 0 Then
+                    secondaryKey = Trim(ws.Cells(i, secondaryKeyCol).Value)
+                Else
+                    secondaryKey = ""
+                End If
+            End If
+            
+            ' Create lookup key
+            Dim lookupKey As String
+            lookupKey = GenerateConsistentKey(primaryKey, secondaryKey, useCompositeKey)
+            
+            ' Add to index - no need to check for duplicates as we're using the first occurrence
+            ' This gives better performance and handles the case of duplicates properly
+            count = count + 1
+            
+            ' Check if we need to resize arrays
+            If count > UBound(keys) Then
+                ReDim Preserve keys(1 To count * 2)
+                ReDim Preserve values(1 To count * 2)
+            End If
+            
+            keys(count) = lookupKey
+            values(count) = i ' Store row index
+        Next i
+    Next chunk
+End Sub
+
+' Main reconciliation function - now broken into logical components
+Sub PerformReconciliation(mappings() As String)
+    ' Perform the reconciliation and populate the Result sheet using a 2D array of mappings
+    On Error GoTo ErrorHandler
+    
+    ' Variable declarations
+    Dim wsFileA As Worksheet
+    Dim wsFileB As Worksheet
+    Dim wsResult As Worksheet
+    Dim wsSupplA As Worksheet
+    Dim wsSupplB As Worksheet
+    Dim lastRowA As Long, lastRowB As Long
+    Dim lastColA As Long, lastColB As Long
+    Dim lastColSupplA As Long, lastColSupplB As Long
+    Dim colPrimaryKeyA As Long, colPrimaryKeyB As Long
+    Dim colSecondaryKeyA As Long, colSecondaryKeyB As Long
+    Dim colSupplKeyA As Long, colSupplKeyB As Long
+    Dim hasSupplA As Boolean
+    Dim hasSupplB As Boolean
+    Dim lastRowSupplA As Long
+    Dim lastRowSupplB As Long
+    Dim reconColCount As Long
+    Dim rowResult As Long
+    Dim colOffset As Long
+    Dim mappingCount As Long
+    Dim isMac As Boolean
+    Dim useArrays As Boolean
+    Dim dataA() As Variant
+    Dim dataB() As Variant
+    Dim supplDataA() As Variant
+    Dim supplDataB() As Variant
+    Dim requiredSupplColsA() As String
+    Dim requiredSupplColsB() As String
+    Dim requiredSupplColIndexA() As Long
+    Dim requiredSupplColIndexB() As Long
+    Dim suppColsAInitialized As Boolean
+    Dim suppColsBInitialized As Boolean
+    
+    ' Column mapping arrays
+    Dim colMapAKeys() As String
+    Dim colMapAValues() As Long
+    Dim colMapACount As Long
+    Dim colMapBKeys() As String
+    Dim colMapBValues() As Long
+    Dim colMapBCount As Long
+    
+    ' Lookup arrays
+    Dim fileBPrimaryKeys() As String
+    Dim fileBPrimaryValues() As Long
+    Dim fileBPrimaryCount As Long
+    Dim fileBCompositeKeys() As String
+    Dim fileBCompositeValues() As Long
+    Dim fileBCompositeCount As Long
+    Dim fileAPrimaryKeys() As String
+    Dim fileAPrimaryValues() As Long
+    Dim fileAPrimaryCount As Long
+    Dim fileACompositeKeys() As String
+    Dim fileACompositeValues() As Long
+    Dim fileACompositeCount As Long
+    
+    ' Case sensitivity setting
+    Dim useCaseSensitive As Boolean
+    useCaseSensitive = True ' Set to True for case-sensitive comparison
+    
+    ' Initialize
+    #If Mac Then
+        isMac = True
+    #Else
+        isMac = False
+    #End If
+    
+    ' Safely get mapping count
+    On Error Resume Next
+    mappingCount = UBound(mappings, 1) + 1
+    If Err.Number <> 0 Then
+        mappingCount = 0
+    End If
+    On Error GoTo ErrorHandler
+    
+    ' STEP 1: Set up worksheets and validate basic requirements
+    If Not SetupWorksheets(wsFileA, wsFileB, wsResult, wsSupplA, wsSupplB) Then
+        Exit Sub
+    End If
+    
+    ' STEP 2: Get data dimensions and validate data exists
+    If Not GetDataDimensions(wsFileA, wsFileB, lastRowA, lastRowB, lastColA, lastColB) Then
+        Exit Sub
+    End If
+    
+    ' STEP 3: Build column maps and find key columns
+    InitializeColumnMaps colMapAKeys, colMapAValues, colMapACount, colMapBKeys, colMapBValues, colMapBCount, _
+                         gintMaxReconciliationColumns
+    
+    BuildColumnMaps wsFileA, wsFileB, lastColA, lastColB, _
+                    colMapAKeys, colMapAValues, colMapACount, _
+                    colMapBKeys, colMapBValues, colMapBCount
+    
+    ' Find primary and secondary key columns
+    If Not FindKeyColumns(colMapAKeys, colMapAValues, colMapACount, _
+                         colMapBKeys, colMapBValues, colMapBCount, _
+                         gstrPrimaryKeyA, gstrPrimaryKeyB, _
+                         gstrSecondaryKeyA, gstrSecondaryKeyB, _
+                         colPrimaryKeyA, colPrimaryKeyB, _
+                         colSecondaryKeyA, colSecondaryKeyB) Then
+        Exit Sub
+    End If
+    
+ ' STEP 4: Process supplementary files
+If Not SetupSupplementaryFiles(wsSupplA, wsSupplB, _
+                             hasSupplA, hasSupplB, _
+                             gstrSupplementaryFileAPath, gstrSupplementaryFileBPath, _
+                             gstrSupplementaryASourceKey, gstrSupplementaryBSourceKey, _
+                             colSupplKeyA, colSupplKeyB, _
+                             lastColSupplA, lastColSupplB, _
+                             lastRowSupplA, lastRowSupplB, _
+                             requiredSupplColsA, requiredSupplColsB, _
+                             requiredSupplColIndexA, requiredSupplColIndexB, _
+                             suppColsAInitialized, suppColsBInitialized) Then
+    ' Continue even if supplementary setup failed - just without supplementary data
+End If
+    
+    ' STEP 5: Load data into arrays for faster processing
+    Application.StatusBar = "Loading data into memory..."
+    useArrays = LoadDataIntoArrays(wsFileA, wsFileB, wsSupplA, wsSupplB, _
+                                lastRowA, lastRowB, lastColA, lastColB, _
+                                lastColSupplA, lastColSupplB, _
+                                hasSupplA, hasSupplB, lastRowSupplA, lastRowSupplB, _
+                                dataA, dataB, supplDataA, supplDataB, isMac)
+    
+    ' STEP 6: Build optimized lookup indexes
+    Application.StatusBar = "Building optimized lookup tables..."
+    BuildLookupIndexes wsFileA, wsFileB, _
+                      colPrimaryKeyA, colPrimaryKeyB, _
+                      colSecondaryKeyA, colSecondaryKeyB, _
+                      lastRowA, lastRowB, useArrays, dataA, dataB, _
+                      fileAPrimaryKeys, fileAPrimaryValues, fileAPrimaryCount, _
+                      fileACompositeKeys, fileACompositeValues, fileACompositeCount, _
+                      fileBPrimaryKeys, fileBPrimaryValues, fileBPrimaryCount, _
+                      fileBCompositeKeys, fileBCompositeValues, fileBCompositeCount
+    
+    ' STEP 7: Set up Result sheet headers
+    Application.StatusBar = "Setting up result columns..."
+    reconColCount = SetupResultHeaders(wsResult, wsFileA, wsFileB, _
+                                      mappings, mappingCount, _
+                                      lastColA, lastColB, _
+                                      colMapAKeys, colMapAValues, colMapACount, _
+                                      colMapBKeys, colMapBValues, colMapBCount, _
+                                      gstrInputASource, gstrInputBSource, _
+                                      hasSupplA, hasSupplB, _
+                                      requiredSupplColsA, requiredSupplColsB, _
+                                      suppColsAInitialized, suppColsBInitialized)
+    
+    ' STEP 8: Process File A records (matches and singletons in A)
+    Application.StatusBar = "Processing File A records..."
+    rowResult = 4 ' Start at row 4 for results
+    
+    ProcessFileARecords wsFileA, wsFileB, wsResult, wsSupplA, wsSupplB, _
+                       dataA, dataB, supplDataA, supplDataB, _
+                       colMapAKeys, colMapAValues, colMapACount, _
+                       colMapBKeys, colMapBValues, colMapBCount, _
+                       colPrimaryKeyA, colPrimaryKeyB, _
+                       colSecondaryKeyA, colSecondaryKeyB, _
+                       colSupplKeyA, colSupplKeyB, _
+                       lastRowA, lastColA, lastColB, _
+                       gstrInputASource, gstrInputBSource, _
+                       gstrSupplementaryKeyA, gstrSupplementaryKeyB, _
+                       fileBPrimaryKeys, fileBPrimaryValues, fileBPrimaryCount, _
+                       fileBCompositeKeys, fileBCompositeValues, fileBCompositeCount, _
+                       mappings, mappingCount, reconColCount, _
+                       hasSupplA, hasSupplB, _
+                       requiredSupplColsA, requiredSupplColsB, _
+                       requiredSupplColIndexA, requiredSupplColIndexB, _
+                       suppColsAInitialized, suppColsBInitialized, _
+                       useCaseSensitive, useArrays, rowResult
+    
+    ' STEP 9: Process File B records (singletons in B)
+    Application.StatusBar = "Processing File B singletons..."
+    
+    ProcessFileBSingletons wsFileA, wsFileB, wsResult, wsSupplB, _
+                          dataA, dataB, supplDataB, _
+                          colMapAKeys, colMapAValues, colMapACount, _
+                          colMapBKeys, colMapBValues, colMapBCount, _
+                          colPrimaryKeyA, colPrimaryKeyB, _
+                          colSecondaryKeyA, colSecondaryKeyB, _
+                          colSupplKeyB, _
+                          lastRowB, lastColA, lastColB, _
+                          gstrInputBSource, gstrSupplementaryKeyB, _
+                          fileAPrimaryKeys, fileAPrimaryValues, fileAPrimaryCount, _
+                          fileACompositeKeys, fileACompositeValues, fileACompositeCount, _
+                          reconColCount, _
+                          hasSupplA, hasSupplB, _
+                          requiredSupplColsA, requiredSupplColsB, _
+                          requiredSupplColIndexB, _
+                          suppColsAInitialized, suppColsBInitialized, _
+                          useCaseSensitive, useArrays, rowResult
+    
+    ' STEP 10: Format the Result sheet
+    With wsResult.Range("A3:ZZ3")
+        .Font.Bold = True
+        .Borders.LineStyle = xlContinuous
+    End With
+    
+    With wsResult.Range("A3:ZZ" & (rowResult - 1))
+        .Borders.LineStyle = xlContinuous
+    End With
+    
+    ' Auto-fit columns - limit to avoid performance issues on large datasets
+    If rowResult < 1000 Then
+        wsResult.Columns("B:ZZ").AutoFit
+    Else
+        ' Just set reasonable widths for very large datasets
+        wsResult.Columns("B:ZZ").ColumnWidth = 15
+    End If
+    
+    Application.StatusBar = "Reconciliation complete!"
+    Exit Sub
+    
+ErrorHandler:
+    ' Show detailed error information
+    MsgBox "Error " & Err.Number & " (" & Err.Description & ")" & vbCrLf & _
+           "Procedure: PerformReconciliation" & vbCrLf & _
+           "Line: " & Erl, vbCritical, "Error"
+End Sub
+
+' Function 1: Setup and validate worksheets
+Function SetupWorksheets(ByRef wsFileA As Worksheet, ByRef wsFileB As Worksheet, _
+                        ByRef wsResult As Worksheet, ByRef wsSupplA As Worksheet, _
+                        ByRef wsSupplB As Worksheet) As Boolean
+    On Error Resume Next
+    Set wsFileA = Worksheets("Input File A")
+    Set wsFileB = Worksheets("Input File B")
+    Set wsResult = Worksheets("Result")
+    Set wsSupplA = Worksheets("Supplementary File A")
+    Set wsSupplB = Worksheets("Supplementary File B")
+    
+    If wsFileA Is Nothing Then
+        MsgBox "Worksheet 'Input File A' not found.", vbExclamation, "Missing Worksheet"
+        SetupWorksheets = False
+        Exit Function
+    End If
+    
+    If wsFileB Is Nothing Then
+        MsgBox "Worksheet 'Input File B' not found.", vbExclamation, "Missing Worksheet"
+        SetupWorksheets = False
+        Exit Function
+    End If
+    
+    If wsResult Is Nothing Then
+        MsgBox "Worksheet 'Result' not found.", vbExclamation, "Missing Worksheet"
+        SetupWorksheets = False
+        Exit Function
+    End If
+    
+    On Error GoTo 0
+    
+    ' Clear Result sheet
+    ClearResultSheet
+    
+    SetupWorksheets = True
+End Function
+
+' Function 2: Get data dimensions and validate data exists
+Function GetDataDimensions(wsFileA As Worksheet, wsFileB As Worksheet, _
+                         ByRef lastRowA As Long, ByRef lastRowB As Long, _
+                         ByRef lastColA As Long, ByRef lastColB As Long) As Boolean
+    ' Find the last rows and columns with data
+    lastRowA = wsFileA.Cells(wsFileA.Rows.count, 1).End(xlUp).Row
+    lastRowB = wsFileB.Cells(wsFileB.Rows.count, 1).End(xlUp).Row
+    lastColA = wsFileA.Cells(3, wsFileA.Columns.count).End(xlToLeft).Column
+    lastColB = wsFileB.Cells(3, wsFileB.Columns.count).End(xlToLeft).Column
+    
+    ' Check if data exists
+    If lastRowA <= 3 Then
+        MsgBox "No data found in Input File A.", vbExclamation, "No Data"
+        GetDataDimensions = False
+        Exit Function
+    End If
+    
+    If lastRowB <= 3 Then
+        MsgBox "No data found in Input File B.", vbExclamation, "No Data"
+        GetDataDimensions = False
+        Exit Function
+    End If
+    
+    GetDataDimensions = True
+End Function
+
+' Function 3: Initialize column map arrays
+Sub InitializeColumnMaps(ByRef colMapAKeys() As String, ByRef colMapAValues() As Long, ByRef colMapACount As Long, _
+                        ByRef colMapBKeys() As String, ByRef colMapBValues() As Long, ByRef colMapBCount As Long, _
+                        maxColumns As Long)
+    ReDim colMapAKeys(1 To maxColumns * 2) ' * 2 for safety margin
+    ReDim colMapAValues(1 To maxColumns * 2)
+    colMapACount = 0
+    
+    ReDim colMapBKeys(1 To maxColumns * 2)
+    ReDim colMapBValues(1 To maxColumns * 2)
+    colMapBCount = 0
+End Sub
+
+' Function 4: Build column maps for faster lookups
+Sub BuildColumnMaps(wsFileA As Worksheet, wsFileB As Worksheet, _
+                   lastColA As Long, lastColB As Long, _
+                   ByRef colMapAKeys() As String, ByRef colMapAValues() As Long, ByRef colMapACount As Long, _
+                   ByRef colMapBKeys() As String, ByRef colMapBValues() As Long, ByRef colMapBCount As Long)
+    Dim i As Long, j As Long
+    
+    ' Column map for file A
+    For i = 1 To lastColA
+        colMapACount = colMapACount + 1
+        If colMapACount > UBound(colMapAKeys) Then
+            ReDim Preserve colMapAKeys(1 To colMapACount * 2)
+            ReDim Preserve colMapAValues(1 To colMapACount * 2)
+        End If
+        
+        colMapAKeys(colMapACount) = wsFileA.Cells(3, i).Value
+        colMapAValues(colMapACount) = i
+        
+        ' Also map _map columns
+        If Right(wsFileA.Cells(3, i).Value, 4) <> "_map" Then
+            Dim mappedColA As String
+            mappedColA = wsFileA.Cells(3, i).Value & "_map"
+            
+            ' Try to find the mapped column
+            For j = 1 To lastColA
+                If wsFileA.Cells(3, j).Value = mappedColA Then
+                    colMapACount = colMapACount + 1
+                    If colMapACount > UBound(colMapAKeys) Then
+                        ReDim Preserve colMapAKeys(1 To colMapACount * 2)
+                        ReDim Preserve colMapAValues(1 To colMapACount * 2)
+                    End If
+                    colMapAKeys(colMapACount) = mappedColA
+                    colMapAValues(colMapACount) = j
+                    Exit For
+                End If
+            Next j
+        End If
+    Next i
+    
+    ' Column map for file B
+    For i = 1 To lastColB
+        colMapBCount = colMapBCount + 1
+        If colMapBCount > UBound(colMapBKeys) Then
+            ReDim Preserve colMapBKeys(1 To colMapBCount * 2)
+            ReDim Preserve colMapBValues(1 To colMapBCount * 2)
+        End If
+        
+        colMapBKeys(colMapBCount) = wsFileB.Cells(3, i).Value
+        colMapBValues(colMapBCount) = i
+        
+        ' Also map _map columns
+        If Right(wsFileB.Cells(3, i).Value, 4) <> "_map" Then
+            Dim mappedColB As String
+            mappedColB = wsFileB.Cells(3, i).Value & "_map"
+            
+            ' Try to find the mapped column
+            For j = 1 To lastColB
+                If wsFileB.Cells(3, j).Value = mappedColB Then
+                    colMapBCount = colMapBCount + 1
+                    If colMapBCount > UBound(colMapBKeys) Then
+                        ReDim Preserve colMapBKeys(1 To colMapBCount * 2)
+                        ReDim Preserve colMapBValues(1 To colMapBCount * 2)
+                    End If
+                    colMapBKeys(colMapBCount) = mappedColB
+                    colMapBValues(colMapBCount) = j
+                    Exit For
+                End If
+            Next j
+        End If
+    Next i
+End Sub
+
+' Function 5: Find key columns from maps
+Function FindKeyColumns(colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                      colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                      primaryKeyA As String, primaryKeyB As String, _
+                      secondaryKeyA As String, secondaryKeyB As String, _
+                      ByRef colPrimaryKeyA As Long, ByRef colPrimaryKeyB As Long, _
+                      ByRef colSecondaryKeyA As Long, ByRef colSecondaryKeyB As Long) As Boolean
+    Dim i As Long
+    
+    colPrimaryKeyA = 0
+    colPrimaryKeyB = 0
+    colSecondaryKeyA = 0
+    colSecondaryKeyB = 0
+    
+    For i = 1 To colMapACount
+        If colMapAKeys(i) = primaryKeyA Then
+            colPrimaryKeyA = colMapAValues(i)
+        ElseIf secondaryKeyA <> "" And colMapAKeys(i) = secondaryKeyA Then
+            colSecondaryKeyA = colMapAValues(i)
+        End If
+    Next i
+    
+    For i = 1 To colMapBCount
+        If colMapBKeys(i) = primaryKeyB Then
+            colPrimaryKeyB = colMapBValues(i)
+        ElseIf secondaryKeyB <> "" And colMapBKeys(i) = secondaryKeyB Then
+            colSecondaryKeyB = colMapBValues(i)
+        End If
+    Next i
+    
+    If colPrimaryKeyA = 0 Then
+        MsgBox "Primary key column '" & primaryKeyA & "' not found in Input File A.", vbExclamation, "Key Not Found"
+        FindKeyColumns = False
+        Exit Function
+    End If
+    
+    If colPrimaryKeyB = 0 Then
+        MsgBox "Primary key column '" & primaryKeyB & "' not found in Input File B.", vbExclamation, "Key Not Found"
+        FindKeyColumns = False
+        Exit Function
+    End If
+    
+    If secondaryKeyA <> "" And colSecondaryKeyA = 0 Then
+        MsgBox "Secondary key column '" & secondaryKeyA & "' not found in Input File A.", vbExclamation, "Key Not Found"
+        FindKeyColumns = False
+        Exit Function
+    End If
+    
+    If secondaryKeyB <> "" And colSecondaryKeyB = 0 Then
+        MsgBox "Secondary key column '" & secondaryKeyB & "' not found in Input File B.", vbExclamation, "Key Not Found"
+        FindKeyColumns = False
+        Exit Function
+    End If
+    
+    FindKeyColumns = True
+End Function
+
+' Function 6: Setup supplementary files
+Function SetupSupplementaryFiles(wsSupplA As Worksheet, wsSupplB As Worksheet, _
+                               ByRef hasSupplA As Boolean, ByRef hasSupplB As Boolean, _
+                               supplFileAPath As String, supplFileBPath As String, _
+                               supplASourceKey As String, supplBSourceKey As String, _
+                               ByRef colSupplKeyA As Long, ByRef colSupplKeyB As Long, _
+                               ByRef lastColSupplA As Long, ByRef lastColSupplB As Long, _
+                               ByRef lastRowSupplA As Long, ByRef lastRowSupplB As Long, _
+                               ByRef requiredSupplColsA() As String, ByRef requiredSupplColsB() As String, _
+                               ByRef requiredSupplColIndexA() As Long, ByRef requiredSupplColIndexB() As Long, _
+                               ByRef suppColsAInitialized As Boolean, ByRef suppColsBInitialized As Boolean) As Boolean
+    Dim i As Long
+    Dim j As Long
+    Dim useArrays As Boolean
+
+    hasSupplA = False
+    hasSupplB = False
+    suppColsAInitialized = False
+    suppColsBInitialized = False
+    useArrays = True ' Initialize with default value
+
+    ' Safely check if supplementary files exist
+    On Error Resume Next
+    hasSupplA = (supplFileAPath <> "" And Not wsSupplA Is Nothing)
+    hasSupplB = (supplFileBPath <> "" And Not wsSupplB Is Nothing)
+    On Error GoTo ErrorHandler
+
+    ' Process Supplementary File A
+    If hasSupplA Then
+        On Error Resume Next
+        lastColSupplA = wsSupplA.Cells(3, wsSupplA.Columns.count).End(xlToLeft).Column
+        colSupplKeyA = FindColumnIndex(wsSupplA, supplASourceKey)
+        
+        Debug.Print "Checking Supplementary A key: " & supplASourceKey & ", found in column: " & colSupplKeyA
+        
+        ' Add proper validation for key
+        If colSupplKeyA = 0 Or supplASourceKey = "" Then
+            Debug.Print "WARNING: Invalid key for Supplementary A"
+            hasSupplA = False  ' Disable if key is invalid
+        Else
+            ' Get the required supplementary columns for File A
+            requiredSupplColsA = GetRequiredSupplementaryColumns("A")
+            
+            ' Additional validation - if we have no columns, mark as not having supplementary data
+            If UBound(requiredSupplColsA) = 0 And requiredSupplColsA(0) = "" Then
+                Debug.Print "WARNING: No supplementary columns specified for A"
+                hasSupplA = False  ' Disable if no columns
+            ElseIf UBound(requiredSupplColsA) >= 0 And requiredSupplColsA(0) <> "" Then
+                ReDim requiredSupplColIndexA(UBound(requiredSupplColsA))
+                
+                ' Find the column index for each required column
+                For i = 0 To UBound(requiredSupplColsA)
+                    If requiredSupplColsA(i) <> "" Then
+                        requiredSupplColIndexA(i) = FindColumnIndex(wsSupplA, requiredSupplColsA(i))
+                        
+                        ' Validate column exists
+                        If requiredSupplColIndexA(i) = 0 Then
+                            Debug.Print "WARNING: Supplementary A column '" & requiredSupplColsA(i) & "' not found"
+                        End If
+                    End If
+                Next i
+                
+                suppColsAInitialized = True
+            End If
+        End If
+        
+        If Err.Number <> 0 Then
+            Debug.Print "ERROR in Supplementary A setup: " & Err.Number & " - " & Err.Description
+            useArrays = False
+            Err.Clear
+        End If
+        On Error GoTo 0
+    End If
+
+    ' Apply the same changes to the Supplementary B section
+    If hasSupplB Then
+        On Error Resume Next
+        lastColSupplB = wsSupplB.Cells(3, wsSupplB.Columns.count).End(xlToLeft).Column
+        colSupplKeyB = FindColumnIndex(wsSupplB, supplBSourceKey)
+        
+        Debug.Print "Checking Supplementary B key: " & supplBSourceKey & ", found in column: " & colSupplKeyB
+        
+        ' Add proper validation for key
+        If colSupplKeyB = 0 Or supplBSourceKey = "" Then
+            Debug.Print "WARNING: Invalid key for Supplementary B"
+            hasSupplB = False  ' Disable if key is invalid
+        Else
+            ' Get the required supplementary columns for File B
+            requiredSupplColsB = GetRequiredSupplementaryColumns("B")
+            
+            ' Additional validation - if we have no columns, mark as not having supplementary data
+            If UBound(requiredSupplColsB) = 0 And requiredSupplColsB(0) = "" Then
+                Debug.Print "WARNING: No supplementary columns specified for B"
+                hasSupplB = False  ' Disable if no columns
+            ElseIf UBound(requiredSupplColsB) >= 0 And requiredSupplColsB(0) <> "" Then
+                ReDim requiredSupplColIndexB(UBound(requiredSupplColsB))
+                
+                ' Find the column index for each required column
+                For i = 0 To UBound(requiredSupplColsB)
+                    If requiredSupplColsB(i) <> "" Then
+                        requiredSupplColIndexB(i) = FindColumnIndex(wsSupplB, requiredSupplColsB(i))
+                        
+                        ' Validate column exists
+                        If requiredSupplColIndexB(i) = 0 Then
+                            Debug.Print "WARNING: Supplementary B column '" & requiredSupplColsB(i) & "' not found"
+                        End If
+                    End If
+                Next i
+                
+                suppColsBInitialized = True
+            End If
+        End If
+        
+        If Err.Number <> 0 Then
+            Debug.Print "ERROR in Supplementary B setup: " & Err.Number & " - " & Err.Description
+            useArrays = False
+            Err.Clear
+        End If
+        On Error GoTo 0
+    End If
+
+    ' Add some debug information to help troubleshoot
+    Debug.Print "Supplementary File Setup:"
+    Debug.Print "  Has Suppl A: " & hasSupplA & ", Initialized: " & suppColsAInitialized
+    If hasSupplA Then
+        Debug.Print "  Suppl A Key Column: " & colSupplKeyA & " (" & supplASourceKey & ")"
+        Debug.Print "  Suppl A Columns:"
+        If suppColsAInitialized Then
+            For i = 0 To UBound(requiredSupplColsA)
+                Debug.Print "    " & requiredSupplColsA(i) & " at column " & requiredSupplColIndexA(i)
+            Next i
+        End If
+    End If
+    
+    Debug.Print "  Has Suppl B: " & hasSupplB & ", Initialized: " & suppColsBInitialized
+    If hasSupplB Then
+        Debug.Print "  Suppl B Key Column: " & colSupplKeyB & " (" & supplBSourceKey & ")"
+        Debug.Print "  Suppl B Columns:"
+        If suppColsBInitialized Then
+            For i = 0 To UBound(requiredSupplColsB)
+                Debug.Print "    " & requiredSupplColsB(i) & " at column " & requiredSupplColIndexB(i)
+            Next i
+        End If
+    End If
+
+    SetupSupplementaryFiles = True
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "Error in SetupSupplementaryFiles: " & Err.Number & " - " & Err.Description
+    SetupSupplementaryFiles = False
+End Function
+
+' Function 7: Load data into arrays for faster processing
+Function LoadDataIntoArrays(wsFileA As Worksheet, wsFileB As Worksheet, _
+                          wsSupplA As Worksheet, wsSupplB As Worksheet, _
+                          lastRowA As Long, lastRowB As Long, _
+                          lastColA As Long, lastColB As Long, _
+                          lastColSupplA As Long, lastColSupplB As Long, _
+                          ByRef hasSupplA As Boolean, ByRef hasSupplB As Boolean, _
+                          ByRef lastRowSupplA As Long, ByRef lastRowSupplB As Long, _
+                          ByRef dataA() As Variant, ByRef dataB() As Variant, _
+                          ByRef supplDataA() As Variant, ByRef supplDataB() As Variant, _
+                          isMac As Boolean) As Boolean
+    Dim maxArraySize As Long
+    Dim useArrays As Boolean
+    Dim i As Long, j As Long
+    Dim chunk As Long, startRow As Long, endRow As Long
+    Const CHUNK_SIZE As Long = 1000
+    
+    ' Check if Mac (adjust array sizes for Mac's more limited memory)
+    If isMac Then
+        maxArraySize = 300000 ' More conservative limit for Mac
+    Else
+        maxArraySize = 5000000 ' Higher limit for Windows
+    End If
+    
+    ' Check if data will fit in arrays
+    useArrays = ((lastRowA - 3) * lastColA < maxArraySize) And ((lastRowB - 3) * lastColB < maxArraySize)
+    
+    If useArrays Then
+        ' Load all data at once into arrays
+        On Error Resume Next
+        ReDim dataA(4 To lastRowA, 1 To lastColA)
+        ReDim dataB(4 To lastRowB, 1 To lastColB)
+        
+        ' Read in chunks to avoid memory issues
+        For chunk = 0 To (lastRowA - 4) \ CHUNK_SIZE
+            startRow = 4 + chunk * CHUNK_SIZE
+            endRow = Application.Min(startRow + CHUNK_SIZE - 1, lastRowA)
+            
+            For i = startRow To endRow
+                For j = 1 To lastColA
+                    dataA(i, j) = Trim(wsFileA.Cells(i, j).Value)
+                Next j
+            Next i
+            
+            ' Update status every chunk
+            Application.StatusBar = "Loading File A data: " & _
+                Format((endRow - 4) / (lastRowA - 4), "0%") & " complete..."
+        Next chunk
+        
+        For chunk = 0 To (lastRowB - 4) \ CHUNK_SIZE
+            startRow = 4 + chunk * CHUNK_SIZE
+            endRow = Application.Min(startRow + CHUNK_SIZE - 1, lastRowB)
+            
+            For i = startRow To endRow
+                For j = 1 To lastColB
+                    dataB(i, j) = Trim(wsFileB.Cells(i, j).Value)
+                Next j
+            Next i
+            
+            ' Update status every chunk
+            Application.StatusBar = "Loading File B data: " & _
+                Format((endRow - 4) / (lastRowB - 4), "0%") & " complete..."
+        Next chunk
+        
+        If Err.Number <> 0 Then
+            useArrays = False
+            Err.Clear
+        End If
+        On Error GoTo 0
+    End If
+    
+    ' Load supplementary data if needed
+    If hasSupplA Then
+        On Error Resume Next
+        lastRowSupplA = wsSupplA.Cells(wsSupplA.Rows.count, 1).End(xlUp).Row
+        
+        If lastRowSupplA > 3 Then
+            ReDim supplDataA(4 To lastRowSupplA, 1 To lastColSupplA)
+            
+            For i = 4 To lastRowSupplA
+                For j = 1 To lastColSupplA
+                    supplDataA(i, j) = Trim(wsSupplA.Cells(i, j).Value)
+                Next j
+            Next i
+        Else
+            hasSupplA = False
+        End If
+        On Error GoTo 0
+    End If
+    
+    If hasSupplB Then
+        On Error Resume Next
+        lastRowSupplB = wsSupplB.Cells(wsSupplB.Rows.count, 1).End(xlUp).Row
+        
+        If lastRowSupplB > 3 Then
+            ReDim supplDataB(4 To lastRowSupplB, 1 To lastColSupplB)
+            
+            For i = 4 To lastRowSupplB
+                For j = 1 To lastColSupplB
+                    supplDataB(i, j) = Trim(wsSupplB.Cells(i, j).Value)
+                Next j
+            Next i
+        Else
+            hasSupplB = False
+        End If
+        On Error GoTo 0
+    End If
+    
+    LoadDataIntoArrays = useArrays
+End Function
+
+' Function 8: Build lookup indexes for faster key searching
+Sub BuildLookupIndexes(wsFileA As Worksheet, wsFileB As Worksheet, _
+                      colPrimaryKeyA As Long, colPrimaryKeyB As Long, _
+                      colSecondaryKeyA As Long, colSecondaryKeyB As Long, _
+                      lastRowA As Long, lastRowB As Long, _
+                      useArrays As Boolean, dataA() As Variant, dataB() As Variant, _
+                      ByRef fileAPrimaryKeys() As String, ByRef fileAPrimaryValues() As Long, ByRef fileAPrimaryCount As Long, _
+                      ByRef fileACompositeKeys() As String, ByRef fileACompositeValues() As Long, ByRef fileACompositeCount As Long, _
+                      ByRef fileBPrimaryKeys() As String, ByRef fileBPrimaryValues() As Long, ByRef fileBPrimaryCount As Long, _
+                      ByRef fileBCompositeKeys() As String, ByRef fileBCompositeValues() As Long, ByRef fileBCompositeCount As Long)
+    
+    ' Initialize arrays
+    ReDim fileBPrimaryKeys(1 To lastRowB - 3)  ' Allocate for maximum possible records
+    ReDim fileBPrimaryValues(1 To lastRowB - 3)
+    fileBPrimaryCount = 0
+    
+    ReDim fileBCompositeKeys(1 To lastRowB - 3)
+    ReDim fileBCompositeValues(1 To lastRowB - 3)
+    fileBCompositeCount = 0
+    
+    ReDim fileAPrimaryKeys(1 To lastRowA - 3)
+    ReDim fileAPrimaryValues(1 To lastRowA - 3)
+    fileAPrimaryCount = 0
+    
+    ReDim fileACompositeKeys(1 To lastRowA - 3)
+    ReDim fileACompositeValues(1 To lastRowA - 3)
+    fileACompositeCount = 0
+    
+    ' Build primary key lookup for File B
+    BuildLookupIndex wsFileB, colPrimaryKeyB, 0, _
+                     4, lastRowB, _
+                     fileBPrimaryKeys, fileBPrimaryValues, fileBPrimaryCount, _
+                     useArrays, dataB, False
+    
+    ' Build composite key lookup for File B if using secondary keys
+    If colSecondaryKeyB > 0 Then
+        BuildLookupIndex wsFileB, colPrimaryKeyB, colSecondaryKeyB, _
+                         4, lastRowB, _
+                         fileBCompositeKeys, fileBCompositeValues, fileBCompositeCount, _
+                         useArrays, dataB, True
+    End If
+    
+    ' Build primary key lookup for File A (for singleton B detection)
+    BuildLookupIndex wsFileA, colPrimaryKeyA, 0, _
+                     4, lastRowA, _
+                     fileAPrimaryKeys, fileAPrimaryValues, fileAPrimaryCount, _
+                     useArrays, dataA, False
+    
+    ' Build composite key lookup for File A if using secondary keys
+    If colSecondaryKeyA > 0 And colSecondaryKeyB > 0 Then
+        BuildLookupIndex wsFileA, colPrimaryKeyA, colSecondaryKeyA, _
+                         4, lastRowA, _
+                         fileACompositeKeys, fileACompositeValues, fileACompositeCount, _
+                         useArrays, dataA, True
+    End If
+End Sub
+
+' Function 9: Set up Result sheet headers and return the reconciliation column count
+Function SetupResultHeaders(wsResult As Worksheet, _
+                           wsFileA As Worksheet, wsFileB As Worksheet, _
+                           mappings() As String, mappingCount As Long, _
+                           lastColA As Long, lastColB As Long, _
+                           colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                           colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                           sourceA As String, sourceB As String, _
+                           hasSupplA As Boolean, hasSupplB As Boolean, _
+                           requiredSupplColsA() As String, requiredSupplColsB() As String, _
+                           suppColsAInitialized As Boolean, suppColsBInitialized As Boolean) As Long
+    Dim i As Long, j As Long, k As Long
+    Dim colOffset As Long
+    Dim reconColCount As Long
+    Dim colA As Long, colB As Long
+    Dim mappedColNameA As String, mappedColNameB As String
+    Dim mappedColIndex As Long
+    
+    ' Column 1: Reconciliation Result
+    wsResult.Cells(3, 1).Value = "Recon Result"
+    wsResult.Columns("A:A").ColumnWidth = 50  ' Increase the width for detailed mismatch info
+    
+    ' Set up column headers for File A, File B, and reconciliation results
+    colOffset = 2 ' Start after Recon Result column
+    
+    ' Columns for File A data - include both original and mapped columns
+    For i = 1 To lastColA
+        ' Check if this is a mapped column (ends with _map)
+        If Right(wsFileA.Cells(3, i).Value, 4) <> "_map" Then
+            wsResult.Cells(3, colOffset).Value = wsFileA.Cells(3, i).Value & " (" & sourceA & ")"
+            wsResult.Cells(3, colOffset).Interior.Color = RGB(204, 204, 255) ' Match Input File A color
+            colOffset = colOffset + 1
+            
+            ' Check if there's a mapped version of this column
+            mappedColNameA = wsFileA.Cells(3, i).Value & "_map"
+            mappedColIndex = 0
+            
+            For j = 1 To colMapACount
+                If colMapAKeys(j) = mappedColNameA Then
+                    mappedColIndex = colMapAValues(j)
+                    Exit For
+                End If
+            Next j
+            
+            If mappedColIndex > 0 Then
+                ' Add the mapped column too
+                wsResult.Cells(3, colOffset).Value = mappedColNameA & " (" & sourceA & ")"
+                wsResult.Cells(3, colOffset).Interior.Color = RGB(153, 153, 204) ' Darker shade for mapped columns
+                wsResult.Cells(3, colOffset).Font.Bold = True
+                colOffset = colOffset + 1
+            End If
+        End If
+    Next i
+    
+    ' Columns for Supplementary File A data if needed
+    If hasSupplA And suppColsAInitialized Then
+        For i = 0 To UBound(requiredSupplColsA)
+            If requiredSupplColsA(i) <> "" Then
+                wsResult.Cells(3, colOffset).Value = requiredSupplColsA(i) & " (Suppl " & sourceA & ")"
+                wsResult.Cells(3, colOffset).Interior.Color = RGB(204, 255, 255) ' Match Supplementary File A color
+                colOffset = colOffset + 1
+            End If
+        Next i
+    End If
+    
+    ' Columns for File B data - include both original and mapped columns
+    For i = 1 To lastColB
+        ' Check if this is a mapped column (ends with _map)
+        If Right(wsFileB.Cells(3, i).Value, 4) <> "_map" Then
+            wsResult.Cells(3, colOffset).Value = wsFileB.Cells(3, i).Value & " (" & sourceB & ")"
+            wsResult.Cells(3, colOffset).Interior.Color = RGB(255, 153, 153) ' Match Input File B color
+            colOffset = colOffset + 1
+            
+            ' Check if there's a mapped version of this column
+            mappedColNameB = wsFileB.Cells(3, i).Value & "_map"
+            mappedColIndex = 0
+            
+            For j = 1 To colMapBCount
+                If colMapBKeys(j) = mappedColNameB Then
+                    mappedColIndex = colMapBValues(j)
+                    Exit For
+                End If
+            Next j
+            
+            If mappedColIndex > 0 Then
+                ' Add the mapped column too
+                wsResult.Cells(3, colOffset).Value = mappedColNameB & " (" & sourceB & ")"
+                wsResult.Cells(3, colOffset).Interior.Color = RGB(153, 153, 204) ' Darker shade for mapped columns
+                wsResult.Cells(3, colOffset).Font.Bold = True
+                colOffset = colOffset + 1
+            End If
+        End If
+    Next i
+    
+    ' Columns for Supplementary File B data if needed
+    If hasSupplB And suppColsBInitialized Then
+        For i = 0 To UBound(requiredSupplColsB)
+            If requiredSupplColsB(i) <> "" Then
+                wsResult.Cells(3, colOffset).Value = requiredSupplColsB(i) & " (Suppl " & sourceB & ")"
+                wsResult.Cells(3, colOffset).Interior.Color = RGB(255, 204, 255) ' Match Supplementary File B color
+                colOffset = colOffset + 1
+            End If
+        Next i
+    End If
+    
+    ' Columns for reconciliation results
+    reconColCount = 0
+    
+    ' Loop through the mappings array
+    If mappingCount > 0 Then
+        For i = 0 To UBound(mappings, 1)
+            colA = 0
+            colB = 0
+            
+            ' Find column indexes using our maps
+            For j = 1 To colMapACount
+                If colMapAKeys(j) = mappings(i, 0) Then
+                    colA = colMapAValues(j)
+                    Exit For
+                End If
+            Next j
+            
+            For j = 1 To colMapBCount
+                If colMapBKeys(j) = mappings(i, 1) Then
+                    colB = colMapBValues(j)
+                    Exit For
+                End If
+            Next j
+            
+            ' If both original columns exist, add a recon column
+            If colA > 0 And colB > 0 Then
+                wsResult.Cells(3, colOffset).Value = mappings(i, 0) & " vs " & mappings(i, 1) & " (Recon)"
+                wsResult.Cells(3, colOffset).Interior.Color = RGB(255, 204, 153) ' Match Result color
+                colOffset = colOffset + 1
+                reconColCount = reconColCount + 1
+            End If
+        Next i
+    End If
+    
+    SetupResultHeaders = reconColCount
+End Function
+
+
+' Function 10: Process File A records (both matches and singletons in A)
+Sub ProcessFileARecords(wsFileA As Worksheet, wsFileB As Worksheet, wsResult As Worksheet, _
+                       wsSupplA As Worksheet, wsSupplB As Worksheet, _
+                       dataA() As Variant, dataB() As Variant, _
+                       supplDataA() As Variant, supplDataB() As Variant, _
+                       colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                       colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                       colPrimaryKeyA As Long, colPrimaryKeyB As Long, _
+                       colSecondaryKeyA As Long, colSecondaryKeyB As Long, _
+                       colSupplKeyA As Long, colSupplKeyB As Long, _
+                       lastRowA As Long, lastColA As Long, lastColB As Long, _
+                       sourceA As String, sourceB As String, _
+                       supplKeyA As String, supplKeyB As String, _
+                       fileBPrimaryKeys() As String, fileBPrimaryValues() As Long, fileBPrimaryCount As Long, _
+                       fileBCompositeKeys() As String, fileBCompositeValues() As Long, fileBCompositeCount As Long, _
+                       mappings() As String, mappingCount As Long, reconColCount As Long, _
+                       hasSupplA As Boolean, hasSupplB As Boolean, _
+                       requiredSupplColsA() As String, requiredSupplColsB() As String, _
+                       requiredSupplColIndexA() As Long, requiredSupplColIndexB() As Long, _
+                       suppColsAInitialized As Boolean, suppColsBInitialized As Boolean, _
+                       useCaseSensitive As Boolean, useArrays As Boolean, _
+                       ByRef rowResult As Long)
+    
+    Dim i As Long, j As Long, k As Long
+    Dim primaryKeyValueA As String, secondaryKeyValueA As String
+    Dim matchFound As Boolean
+    Dim matchType As String
+    Dim matchRowB As Long
+    Dim colOffset As Long
+    Dim lookupKey As String
+    
+    ' Process each record in File A
+    For i = 4 To lastRowA
+        ' Update status bar periodically
+        If i Mod 100 = 0 Then
+            Application.StatusBar = "Processing File A record " & i & " of " & lastRowA & _
+                                   " (" & Format((i - 4) / (lastRowA - 4), "0%") & ")"
+        End If
+        
+        ' Get key values efficiently
+        If useArrays Then
+            primaryKeyValueA = dataA(i, colPrimaryKeyA)
+            If colSecondaryKeyA > 0 Then
+                secondaryKeyValueA = dataA(i, colSecondaryKeyA)
+            Else
+                secondaryKeyValueA = ""
+            End If
+        Else
+            primaryKeyValueA = Trim(wsFileA.Cells(i, colPrimaryKeyA).Value)
+            If colSecondaryKeyA > 0 Then
+                secondaryKeyValueA = Trim(wsFileA.Cells(i, colSecondaryKeyA).Value)
+            Else
+                secondaryKeyValueA = ""
+            End If
+        End If
+        
+        ' Find match in File B
+        FindMatchInFileB primaryKeyValueA, secondaryKeyValueA, _
+                        colSecondaryKeyA, colSecondaryKeyB, _
+                        fileBPrimaryKeys, fileBPrimaryValues, fileBPrimaryCount, _
+                        fileBCompositeKeys, fileBCompositeValues, fileBCompositeCount, _
+                        useCaseSensitive, _
+                        matchFound, matchType, matchRowB
+        
+        If matchFound Then
+            ' Process matched record
+            ProcessMatchedRecord wsFileA, wsFileB, wsResult, wsSupplA, wsSupplB, _
+                              dataA, dataB, supplDataA, supplDataB, _
+                              colMapAKeys, colMapAValues, colMapACount, _
+                              colMapBKeys, colMapBValues, colMapBCount, _
+                              i, matchRowB, matchType, _
+                              colSupplKeyA, colSupplKeyB, _
+                              lastColA, lastColB, _
+                              sourceA, sourceB, supplKeyA, supplKeyB, _
+                              mappings, mappingCount, _
+                              hasSupplA, hasSupplB, _
+                              requiredSupplColsA, requiredSupplColsB, _
+                              requiredSupplColIndexA, requiredSupplColIndexB, _
+                              suppColsAInitialized, suppColsBInitialized, _
+                              useCaseSensitive, useArrays, rowResult
+        Else
+            ' This is a singleton in A (no match in B)
+            ProcessSingletonA wsFileA, wsFileB, wsResult, wsSupplA, _
+                           dataA, supplDataA, _
+                           colMapAKeys, colMapAValues, colMapACount, _
+                           colMapBKeys, colMapBValues, colMapBCount, _
+                           i, colSupplKeyA, _
+                           lastColA, lastColB, _
+                           sourceA, supplKeyA, _
+                           reconColCount, _
+                           hasSupplA, hasSupplB, _
+                           requiredSupplColsA, requiredSupplColsB, _
+                           requiredSupplColIndexA, _
+                           suppColsAInitialized, suppColsBInitialized, _
+                           useArrays, rowResult
+        End If
+        
+        rowResult = rowResult + 1
+    Next i
+End Sub
+
+' Function 11: Find match in File B using lookups
+Sub FindMatchInFileB(primaryKeyValueA As String, secondaryKeyValueA As String, _
+                    colSecondaryKeyA As Long, colSecondaryKeyB As Long, _
+                    fileBPrimaryKeys() As String, fileBPrimaryValues() As Long, fileBPrimaryCount As Long, _
+                    fileBCompositeKeys() As String, fileBCompositeValues() As Long, fileBCompositeCount As Long, _
+                    useCaseSensitive As Boolean, _
+                    ByRef matchFound As Boolean, ByRef matchType As String, ByRef matchRowB As Long)
+    
+    Dim lookupKey As String
+    Dim compositeMatchIndex As Long
+    Dim primaryMatchIndex As Long
+    
+    matchFound = False
+    matchType = ""
+    matchRowB = 0
+    
+    ' Try full match with composite key first (if available)
+    If colSecondaryKeyA > 0 And colSecondaryKeyB > 0 Then
+        ' Create composite lookup key
+        lookupKey = GenerateConsistentKey(primaryKeyValueA, secondaryKeyValueA, True)
+        
+        ' Look for match in the composite key index
+        compositeMatchIndex = KeyExistsInLookup(fileBCompositeKeys, fileBCompositeCount, lookupKey, useCaseSensitive)
+        
+        If compositeMatchIndex > 0 Then
+            matchFound = True
+            matchType = "Full Key Match"
+            matchRowB = fileBCompositeValues(compositeMatchIndex)
+        End If
+    End If
+    
+    ' If no composite match, try primary key only
+    If Not matchFound Then
+        ' Create primary key lookup
+        lookupKey = GenerateConsistentKey(primaryKeyValueA, "", False)
+        
+        ' Look for match in primary key index
+        primaryMatchIndex = KeyExistsInLookup(fileBPrimaryKeys, fileBPrimaryCount, lookupKey, useCaseSensitive)
+        
+        If primaryMatchIndex > 0 Then
+            matchFound = True
+            matchType = "Primary Key Match"
+            matchRowB = fileBPrimaryValues(primaryMatchIndex)
+        End If
+    End If
+End Sub
+
+' Function 12: Process matched record and populate result
+Sub ProcessMatchedRecord(wsFileA As Worksheet, wsFileB As Worksheet, wsResult As Worksheet, _
+                        wsSupplA As Worksheet, wsSupplB As Worksheet, _
+                        dataA() As Variant, dataB() As Variant, _
+                        supplDataA() As Variant, supplDataB() As Variant, _
+                        colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                        colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                        rowA As Long, matchRowB As Long, matchType As String, _
+                        colSupplKeyA As Long, colSupplKeyB As Long, _
+                        lastColA As Long, lastColB As Long, _
+                        sourceA As String, sourceB As String, _
+                        supplKeyA As String, supplKeyB As String, _
+                        mappings() As String, mappingCount As Long, _
+                        hasSupplA As Boolean, hasSupplB As Boolean, _
+                        requiredSupplColsA() As String, requiredSupplColsB() As String, _
+                        requiredSupplColIndexA() As Long, requiredSupplColIndexB() As Long, _
+                        suppColsAInitialized As Boolean, suppColsBInitialized As Boolean, _
+                        useCaseSensitive As Boolean, useArrays As Boolean, _
+                        rowResult As Long)
+                        
+    Dim mismatchedFields As String
+    Dim hasMismatch As Boolean
+    Dim colOffset As Long
+    Dim i As Long, j As Long, k As Long
+    Dim colA As Long, colB As Long
+    Dim colAComp As Long, colBComp As Long
+    Dim mappedColNameA As String, mappedColNameB As String
+    Dim mappedColIndex As Long
+    Dim compareValuesA() As String
+    Dim compareValuesB() As String
+    Dim valueA As String, valueB As String
+    Dim supplMatchRowA As Long, supplMatchRowB As Long
+    
+    ' Check for mismatches across mapped columns
+    CheckForMismatches dataA, dataB, colMapAKeys, colMapAValues, colMapACount, _
+                      colMapBKeys, colMapBValues, colMapBCount, _
+                      rowA, matchRowB, mappings, mappingCount, _
+                      wsFileA, wsFileB, useArrays, useCaseSensitive, _
+                      mismatchedFields, hasMismatch
+    
+    ' Enhanced result message with field mismatches
+    If hasMismatch Then
+        wsResult.Cells(rowResult, 1).Value = matchType & " - Mismatched Fields: " & mismatchedFields
+    Else
+        wsResult.Cells(rowResult, 1).Value = matchType & " - All Fields Match"
+    End If
+    
+    ' Write File A data to Result sheet
+    colOffset = 2 ' Start after Recon Result column
+    WriteFileAData wsFileA, wsResult, dataA, _
+                 colMapAKeys, colMapAValues, colMapACount, _
+                 rowA, rowResult, lastColA, useArrays, colOffset
+    
+    ' Write supplementary data for File A if needed
+    If hasSupplA And suppColsAInitialized Then
+        supplMatchRowA = FindSupplementaryMatch(wsFileA, wsSupplA, _
+                                              dataA, supplDataA, _
+                                              colMapAKeys, colMapAValues, colMapACount, _
+                                              rowA, colSupplKeyA, supplKeyA, _
+                                              useArrays, useCaseSensitive)
+        
+        WriteSupplementaryData wsResult, wsSupplA, supplDataA, _
+                             supplMatchRowA, requiredSupplColsA, requiredSupplColIndexA, _
+                             rowResult, colOffset, useArrays
+    End If
+    
+    ' Write File B data to Result sheet
+    WriteFileBData wsFileB, wsResult, dataB, _
+                 colMapBKeys, colMapBValues, colMapBCount, _
+                 matchRowB, rowResult, lastColB, useArrays, colOffset
+    
+    ' Write supplementary data for File B if needed
+    If hasSupplB And suppColsBInitialized Then
+        supplMatchRowB = FindSupplementaryMatch(wsFileB, wsSupplB, _
+                                             dataB, supplDataB, _
+                                             colMapBKeys, colMapBValues, colMapBCount, _
+                                             matchRowB, colSupplKeyB, supplKeyB, _
+                                             useArrays, useCaseSensitive)
+        
+        WriteSupplementaryData wsResult, wsSupplB, supplDataB, _
+                             supplMatchRowB, requiredSupplColsB, requiredSupplColIndexB, _
+                             rowResult, colOffset, useArrays
+    End If
+    
+    ' Write reconciliation results for each column pair
+    WriteReconciliationResults wsFileA, wsFileB, wsResult, _
+                            dataA, dataB, _
+                            colMapAKeys, colMapAValues, colMapACount, _
+                            colMapBKeys, colMapBValues, colMapBCount, _
+                            rowA, matchRowB, mappings, mappingCount, _
+                            rowResult, colOffset, useArrays, useCaseSensitive
+End Sub
+
+' Function 13: Check for mismatches in mapped columns
+Sub CheckForMismatches(dataA() As Variant, dataB() As Variant, _
+                      colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                      colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                      rowA As Long, rowB As Long, mappings() As String, mappingCount As Long, _
+                      wsFileA As Worksheet, wsFileB As Worksheet, useArrays As Boolean, useCaseSensitive As Boolean, _
+                      ByRef mismatchedFields As String, ByRef hasMismatch As Boolean)
+    
+    Dim colA As Long, colB As Long
+    Dim colAComp As Long, colBComp As Long
+    Dim i As Long, j As Long
+    Dim mappedColNameA As String, mappedColNameB As String
+    Dim compareValuesA() As String
+    Dim compareValuesB() As String
+    
+    mismatchedFields = ""
+    hasMismatch = False
+    
+    If mappingCount <= 0 Then Exit Sub
+    
+    ' Pre-fetch all values for comparison at once (reduces cell access)
+    ReDim compareValuesA(0 To UBound(mappings, 1))
+    ReDim compareValuesB(0 To UBound(mappings, 1))
+    
+    ' Collect all values first for batch comparison
+    For i = 0 To UBound(mappings, 1)
+        colA = 0
+        colB = 0
+        
+        ' Find column indexes using maps
+        For j = 1 To colMapACount
+            If colMapAKeys(j) = mappings(i, 0) Then
+                colA = colMapAValues(j)
+                Exit For
+            End If
+        Next j
+        
+        For j = 1 To colMapBCount
+            If colMapBKeys(j) = mappings(i, 1) Then
+                colB = colMapBValues(j)
+                Exit For
+            End If
+        Next j
+        
+        If colA > 0 And colB > 0 Then
+            ' Try to find mapped columns for comparison
+            mappedColNameA = mappings(i, 0) & "_map"
+            mappedColNameB = mappings(i, 1) & "_map"
+            
+            colAComp = 0
+            colBComp = 0
+            
+            For j = 1 To colMapACount
+                If colMapAKeys(j) = mappedColNameA Then
+                    colAComp = colMapAValues(j)
+                    Exit For
+                End If
+            Next j
+            
+            For j = 1 To colMapBCount
+                If colMapBKeys(j) = mappedColNameB Then
+                    colBComp = colMapBValues(j)
+                    Exit For
+                End If
+            Next j
+            
+            ' Use mapped columns if available, otherwise use original
+            If colAComp > 0 Then
+                If useArrays Then
+                    compareValuesA(i) = dataA(rowA, colAComp)
+                Else
+                    compareValuesA(i) = wsFileA.Cells(rowA, colAComp).Value
+                End If
+            Else
+                If useArrays Then
+                    compareValuesA(i) = dataA(rowA, colA)
+                Else
+                    compareValuesA(i) = wsFileA.Cells(rowA, colA).Value
+                End If
+            End If
+            
+            If colBComp > 0 Then
+                If useArrays Then
+                    compareValuesB(i) = dataB(rowB, colBComp)
+                Else
+                    compareValuesB(i) = wsFileB.Cells(rowB, colBComp).Value
+                End If
+            Else
+                If useArrays Then
+                    compareValuesB(i) = dataB(rowB, colB)
+                Else
+                    compareValuesB(i) = wsFileB.Cells(rowB, colB).Value
+                End If
+            End If
+        End If
+    Next i
+    
+    ' Now do the comparison in a separate loop (reduces cell access overhead)
+    For i = 0 To UBound(mappings, 1)
+        colA = 0
+        colB = 0
+        
+        ' Find column indexes using maps
+        For j = 1 To colMapACount
+            If colMapAKeys(j) = mappings(i, 0) Then
+                colA = colMapAValues(j)
+                Exit For
+            End If
+        Next j
+        
+        For j = 1 To colMapBCount
+            If colMapBKeys(j) = mappings(i, 1) Then
+                colB = colMapBValues(j)
+                Exit For
+            End If
+        Next j
+        
+        If colA > 0 And colB > 0 Then
+            ' Use case-sensitive comparison
+            If (useCaseSensitive And StrComp(compareValuesA(i), compareValuesB(i), vbBinaryCompare) <> 0) Or _
+               (Not useCaseSensitive And StrComp(compareValuesA(i), compareValuesB(i), vbTextCompare) <> 0) Then
+                
+                If hasMismatch Then
+                    mismatchedFields = mismatchedFields & ", "
+                End If
+                mismatchedFields = mismatchedFields & mappings(i, 0)
+                hasMismatch = True
+            End If
+        End If
+    Next i
+End Sub
+
+' Function 14: Write File A data to result
+Sub WriteFileAData(wsFileA As Worksheet, wsResult As Worksheet, dataA() As Variant, _
+                  colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                  rowA As Long, rowResult As Long, lastColA As Long, useArrays As Boolean, _
+                  ByRef colOffset As Long)
+    
+    Dim j As Long, k As Long
+    Dim mappedColNameA As String
+    Dim mappedColIndex As Long
+    
+    ' For writing File A data (both original and mapped columns):
+    For j = 1 To lastColA
+        ' Only process non-mapped columns (we'll add mapped versions right after each original)
+        If Right(wsFileA.Cells(3, j).Value, 4) <> "_map" Then
+            ' Copy the original column value
+            If useArrays Then
+                wsResult.Cells(rowResult, colOffset).Value = dataA(rowA, j)
+            Else
+                wsResult.Cells(rowResult, colOffset).Value = wsFileA.Cells(rowA, j).Value
+            End If
+            colOffset = colOffset + 1
+            
+            ' Check if there's a mapped version and add it
+            mappedColNameA = wsFileA.Cells(3, j).Value & "_map"
+            mappedColIndex = 0
+            
+            For k = 1 To colMapACount
+                If colMapAKeys(k) = mappedColNameA Then
+                    mappedColIndex = colMapAValues(k)
+                    Exit For
+                End If
+            Next k
+            
+            If mappedColIndex > 0 Then
+                If useArrays Then
+                    wsResult.Cells(rowResult, colOffset).Value = dataA(rowA, mappedColIndex)
+                Else
+                    wsResult.Cells(rowResult, colOffset).Value = wsFileA.Cells(rowA, mappedColIndex).Value
+                End If
+                colOffset = colOffset + 1
+            End If
+        End If
+    Next j
+End Sub
+
+' Function 15: Write File B data to result
+Sub WriteFileBData(wsFileB As Worksheet, wsResult As Worksheet, dataB() As Variant, _
+                  colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                  rowB As Long, rowResult As Long, lastColB As Long, useArrays As Boolean, _
+                  ByRef colOffset As Long)
+    
+    Dim j As Long, k As Long
+    Dim mappedColNameB As String
+    Dim mappedColIndex As Long
+    
+    ' For writing File B data (both original and mapped columns):
+    For j = 1 To lastColB
+        ' Only process non-mapped columns
+        If Right(wsFileB.Cells(3, j).Value, 4) <> "_map" Then
+            ' Copy the original column value
+            If useArrays Then
+                wsResult.Cells(rowResult, colOffset).Value = dataB(rowB, j)
+            Else
+                wsResult.Cells(rowResult, colOffset).Value = wsFileB.Cells(rowB, j).Value
+            End If
+            colOffset = colOffset + 1
+            
+            ' Check if there's a mapped version and add it
+            mappedColNameB = wsFileB.Cells(3, j).Value & "_map"
+            mappedColIndex = 0
+            
+            For k = 1 To colMapBCount
+                If colMapBKeys(k) = mappedColNameB Then
+                    mappedColIndex = colMapBValues(k)
+                    Exit For
+                End If
+            Next k
+            
+            If mappedColIndex > 0 Then
+                If useArrays Then
+                    wsResult.Cells(rowResult, colOffset).Value = dataB(rowB, mappedColIndex)
+                Else
+                    wsResult.Cells(rowResult, colOffset).Value = wsFileB.Cells(rowB, mappedColIndex).Value
+                End If
+                colOffset = colOffset + 1
+            End If
+        End If
+    Next j
+End Sub
+
+' Function 16: Find supplementary match
+Function FindSupplementaryMatch(wsInput As Worksheet, wsSuppl As Worksheet, _
+                              dataInput() As Variant, supplData() As Variant, _
+                              colMapKeys() As String, colMapValues() As Long, colMapCount As Long, _
+                              rowInput As Long, colSupplKey As Long, supplKey As String, _
+                              useArrays As Boolean, useCaseSensitive As Boolean) As Long
+    
+    Dim j As Long, k As Long
+    Dim inputSupplKeyCol As Long
+    Dim inputSupplKeyValue As String
+    Dim supplKeyValue As String
+    
+    FindSupplementaryMatch = 0 ' Default to no match
+    
+    On Error Resume Next
+    
+    ' First, find the value of the supplementary key in the input file for the current record
+    inputSupplKeyCol = 0
+    
+    ' Find the column index for the supplementary key in Input File
+    For k = 1 To colMapCount
+        If colMapKeys(k) = supplKey Then
+            inputSupplKeyCol = colMapValues(k)
+            Exit For
+        End If
+    Next k
+    
+    ' Add debugging information
+    'Debug.Print "Supplementary Match Debug:"
+   ' Debug.Print "  Input Key Column: " & inputSupplKeyCol & " (Looking for: " & supplKey & ")"
+    'Debug.Print "  Supplementary Key Column: " & colSupplKey
+    
+    ' Get the value of the supplementary key from the input file
+    If inputSupplKeyCol > 0 Then
+        If useArrays Then
+            inputSupplKeyValue = dataInput(rowInput, inputSupplKeyCol)
+        Else
+            inputSupplKeyValue = Trim(wsInput.Cells(rowInput, inputSupplKeyCol).Value)
+        End If
+        
+        'Debug.Print "  Input Key Value: " & inputSupplKeyValue
+        
+        ' Now search for this value in the supplementary file
+        Dim lastRowSuppl As Long
+        lastRowSuppl = wsSuppl.Cells(wsSuppl.Rows.count, 1).End(xlUp).Row
+        
+        For j = 4 To lastRowSuppl
+            If useArrays Then
+                supplKeyValue = supplData(j, colSupplKey)
+            Else
+                supplKeyValue = Trim(wsSuppl.Cells(j, colSupplKey).Value)
+            End If
+            
+            If (useCaseSensitive And StrComp(supplKeyValue, inputSupplKeyValue, vbBinaryCompare) = 0) Or _
+               (Not useCaseSensitive And StrComp(supplKeyValue, inputSupplKeyValue, vbTextCompare) = 0) Then
+                FindSupplementaryMatch = j
+                'Debug.Print "  MATCH FOUND at row " & j
+                Exit Function
+            End If
+        Next j
+        
+        'Debug.Print "  NO MATCH FOUND"
+    Else
+        Debug.Print "  ERROR: Could not find key column in supplementary file"
+    End If
+    
+    On Error GoTo 0
+End Function
+
+' Function 18: Write reconciliation results
+Sub WriteReconciliationResults(wsFileA As Worksheet, wsFileB As Worksheet, wsResult As Worksheet, _
+                             dataA() As Variant, dataB() As Variant, _
+                             colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                             colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                             rowA As Long, rowB As Long, mappings() As String, mappingCount As Long, _
+                             rowResult As Long, ByRef colOffset As Long, useArrays As Boolean, useCaseSensitive As Boolean)
+    
+    Dim i As Long, j As Long
+    Dim colA As Long, colB As Long
+    Dim colAComp As Long, colBComp As Long
+    Dim mappedColNameA As String, mappedColNameB As String
+    Dim valueA As String, valueB As String
+    
+    If mappingCount <= 0 Then Exit Sub
+    
+    For i = 0 To UBound(mappings, 1)
+        colA = 0
+        colB = 0
+        
+        ' Find column indexes
+        For j = 1 To colMapACount
+            If colMapAKeys(j) = mappings(i, 0) Then
+                colA = colMapAValues(j)
+                Exit For
+            End If
+        Next j
+        
+        For j = 1 To colMapBCount
+            If colMapBKeys(j) = mappings(i, 1) Then
+                colB = colMapBValues(j)
+                Exit For
+            End If
+        Next j
+        
+        If colA > 0 And colB > 0 Then
+            ' Try to find mapped columns for comparison
+            mappedColNameA = mappings(i, 0) & "_map"
+            mappedColNameB = mappings(i, 1) & "_map"
+            
+            colAComp = 0
+            colBComp = 0
+            
+            For j = 1 To colMapACount
+                If colMapAKeys(j) = mappedColNameA Then
+                    colAComp = colMapAValues(j)
+                    Exit For
+                End If
+            Next j
+            
+            For j = 1 To colMapBCount
+                If colMapBKeys(j) = mappedColNameB Then
+                    colBComp = colMapBValues(j)
+                    Exit For
+                End If
+            Next j
+            
+            ' Use mapped columns if available, otherwise use original
+            If colAComp > 0 Then
+                If useArrays Then
+                    valueA = dataA(rowA, colAComp)
+                Else
+                    valueA = wsFileA.Cells(rowA, colAComp).Value
+                End If
+            Else
+                If useArrays Then
+                    valueA = dataA(rowA, colA)
+                Else
+                    valueA = wsFileA.Cells(rowA, colA).Value
+                End If
+            End If
+            
+            If colBComp > 0 Then
+                If useArrays Then
+                    valueB = dataB(rowB, colBComp)
+                Else
+                    valueB = wsFileB.Cells(rowB, colBComp).Value
+                End If
+            Else
+                If useArrays Then
+                    valueB = dataB(rowB, colB)
+                Else
+                    valueB = wsFileB.Cells(rowB, colB).Value
+                End If
+            End If
+            
+            ' Case-sensitive comparison
+            If (useCaseSensitive And StrComp(valueA, valueB, vbBinaryCompare) = 0) Or _
+               (Not useCaseSensitive And StrComp(valueA, valueB, vbTextCompare) = 0) Then
+                wsResult.Cells(rowResult, colOffset).Value = "MATCH"
+                wsResult.Cells(rowResult, colOffset).Interior.Color = RGB(198, 239, 206) ' Light green
+            Else
+                wsResult.Cells(rowResult, colOffset).Value = "UNMATCH"
+                wsResult.Cells(rowResult, colOffset).Interior.Color = RGB(255, 199, 206) ' Light red
+            End If
+            
+            colOffset = colOffset + 1
+        End If
+    Next i
+End Sub
+
+' Function 19: Process singleton in A
+Sub ProcessSingletonA(wsFileA As Worksheet, wsFileB As Worksheet, wsResult As Worksheet, _
+                     wsSupplA As Worksheet, _
+                     dataA() As Variant, supplDataA() As Variant, _
+                     colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                     colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                     rowA As Long, colSupplKeyA As Long, _
+                     lastColA As Long, lastColB As Long, _
+                     sourceA As String, supplKeyA As String, _
+                     reconColCount As Long, _
+                     hasSupplA As Boolean, hasSupplB As Boolean, _
+                     requiredSupplColsA() As String, requiredSupplColsB() As String, _
+                     requiredSupplColIndexA() As Long, _
+                     suppColsAInitialized As Boolean, suppColsBInitialized As Boolean, _
+                     useArrays As Boolean, _
+                     rowResult As Long)
+    
+    Dim j As Long
+    Dim colOffset As Long
+    Dim mappedColNameA As String, mappedColNameB As String
+    Dim mappedColIndex As Long
+    Dim supplMatchRowA As Long
+    Dim suppBColCount As Long
+    Dim k As Long
+    
+    ' Recon Result column
+    wsResult.Cells(rowResult, 1).Value = "Singleton in " & sourceA
+    
+    ' Write File A data to Result sheet - both original and mapped columns
+    colOffset = 2 ' Start after Recon Result column
+    
+    ' For writing File A data (both original and mapped columns):
+    WriteFileAData wsFileA, wsResult, dataA, _
+                 colMapAKeys, colMapAValues, colMapACount, _
+                 rowA, rowResult, lastColA, useArrays, colOffset
+    
+    ' Write supplementary data for File A if needed (for singletons)
+    If hasSupplA And suppColsAInitialized Then
+        supplMatchRowA = FindSupplementaryMatch(wsFileA, wsSupplA, _
+                                              dataA, supplDataA, _
+                                              colMapAKeys, colMapAValues, colMapACount, _
+                                              rowA, colSupplKeyA, supplKeyA, _
+                                              useArrays, True)
+        
+        WriteSupplementaryData wsResult, wsSupplA, supplDataA, _
+                             supplMatchRowA, requiredSupplColsA, requiredSupplColIndexA, _
+                             rowResult, colOffset, useArrays
+    End If
+    
+    ' For singleton in A, leave B columns empty
+    For j = 1 To lastColB
+        ' Count both original and mapped columns to skip
+        If Right(wsFileB.Cells(3, j).Value, 4) <> "_map" Then
+            colOffset = colOffset + 1 ' Skip original column
+            
+            ' Check if there's a mapped version and skip it too
+            mappedColNameB = wsFileB.Cells(3, j).Value & "_map"
+            mappedColIndex = 0
+            
+            For k = 1 To colMapBCount
+                If colMapBKeys(k) = mappedColNameB Then
+                    mappedColIndex = colMapBValues(k)
+                    Exit For
+                End If
+            Next k
+            
+            If mappedColIndex > 0 Then
+                colOffset = colOffset + 1 ' Skip mapped column
+            End If
+        End If
+    Next j
+    
+    ' Skip supplementary B columns if needed
+    If hasSupplB And suppColsBInitialized Then
+        suppBColCount = 0
+        
+        ' Count non-empty supplementary columns
+        For j = 0 To UBound(requiredSupplColsB)
+            If requiredSupplColsB(j) <> "" Then
+                suppBColCount = suppBColCount + 1
+            End If
+        Next j
+        
+        colOffset = colOffset + suppBColCount
+    End If
+    
+    ' UPDATED: Mark recon columns with source-specific singleton message
+    For j = 1 To reconColCount
+        wsResult.Cells(rowResult, colOffset).Value = "Singleton in " & sourceA
+        wsResult.Cells(rowResult, colOffset).Interior.Color = RGB(255, 235, 156) ' Light orange
+        colOffset = colOffset + 1
+    Next j
+End Sub
+
+' Function 20: Process File B singletons
+Sub ProcessFileBSingletons(wsFileA As Worksheet, wsFileB As Worksheet, wsResult As Worksheet, _
+                          wsSupplB As Worksheet, _
+                          dataA() As Variant, dataB() As Variant, _
+                          supplDataB() As Variant, _
+                          colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                          colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                          colPrimaryKeyA As Long, colPrimaryKeyB As Long, _
+                          colSecondaryKeyA As Long, colSecondaryKeyB As Long, _
+                          colSupplKeyB As Long, _
+                          lastRowB As Long, lastColA As Long, lastColB As Long, _
+                          sourceB As String, supplKeyB As String, _
+                          fileAPrimaryKeys() As String, fileAPrimaryValues() As Long, fileAPrimaryCount As Long, _
+                          fileACompositeKeys() As String, fileACompositeValues() As Long, fileACompositeCount As Long, _
+                          reconColCount As Long, _
+                          hasSupplA As Boolean, hasSupplB As Boolean, _
+                          requiredSupplColsA() As String, requiredSupplColsB() As String, _
+                          requiredSupplColIndexB() As Long, _
+                          suppColsAInitialized As Boolean, suppColsBInitialized As Boolean, _
+                          useCaseSensitive As Boolean, useArrays As Boolean, _
+                          ByRef rowResult As Long)
+    
+    Dim i As Long, j As Long, k As Long
+    Dim processedRows As New Collection
+    Dim alreadyProcessed As Boolean
+    Dim primaryKeyB As String, secondaryKeyB As String
+    Dim lookupCompositeKey As String, lookupPrimaryKey As String
+    Dim matchFound As Boolean
+    Dim compositeIndex As Long
+    Dim primaryIndex As Long
+    
+    ' Now process each record in File B to find singletons
+    For i = 4 To lastRowB
+        ' Update status bar periodically
+        If i Mod 100 = 0 Then
+            Application.StatusBar = "Processing File B singletons: " & i & " of " & lastRowB & _
+                                   " (" & Format((i - 4) / (lastRowB - 4), "0%") & ")"
+        End If
+        
+        ' Skip if we've already processed this row
+        On Error Resume Next
+        Dim dummy As Variant
+        dummy = processedRows(CStr(i))
+        alreadyProcessed = (Err.Number = 0)
+        On Error GoTo 0
+        
+        If Not alreadyProcessed Then
+            ' Get key values efficiently
+            If useArrays Then
+                primaryKeyB = dataB(i, colPrimaryKeyB)
+                If colSecondaryKeyB > 0 Then
+                    secondaryKeyB = dataB(i, colSecondaryKeyB)
+                Else
+                    secondaryKeyB = ""
+                End If
+            Else
+                primaryKeyB = Trim(wsFileB.Cells(i, colPrimaryKeyB).Value)
+                If colSecondaryKeyB > 0 Then
+                    secondaryKeyB = Trim(wsFileB.Cells(i, colSecondaryKeyB).Value)
+                Else
+                    secondaryKeyB = ""
+                End If
+            End If
+            
+            ' Create lookup keys
+            lookupCompositeKey = GenerateConsistentKey(primaryKeyB, secondaryKeyB, True)
+            lookupPrimaryKey = GenerateConsistentKey(primaryKeyB, "", False)
+            
+            ' Track that we've processed this row
+            On Error Resume Next
+            processedRows.Add 1, CStr(i)
+            On Error GoTo 0
+            
+            ' Check if this record exists in File A
+            matchFound = False
+            
+            ' Try composite key first if both files have secondary keys
+            If colSecondaryKeyA > 0 And colSecondaryKeyB > 0 Then
+                compositeIndex = KeyExistsInLookup(fileACompositeKeys, fileACompositeCount, lookupCompositeKey, useCaseSensitive)
+                
+                If compositeIndex > 0 Then
+                    matchFound = True
+                End If
+            End If
+            
+            ' Try primary key if no composite match
+            If Not matchFound Then
+                primaryIndex = KeyExistsInLookup(fileAPrimaryKeys, fileAPrimaryCount, lookupPrimaryKey, useCaseSensitive)
+                
+                If primaryIndex > 0 Then
+                    matchFound = True
+                End If
+            End If
+            
+            ' If no match found, this is a singleton in B
+            If Not matchFound Then
+                ProcessSingletonB wsFileA, wsFileB, wsResult, wsSupplB, _
+                               dataB, supplDataB, _
+                               colMapAKeys, colMapAValues, colMapACount, _
+                               colMapBKeys, colMapBValues, colMapBCount, _
+                               i, colSupplKeyB, _
+                               lastColA, lastColB, _
+                               sourceB, supplKeyB, _
+                               reconColCount, _
+                               hasSupplA, hasSupplB, _
+                               requiredSupplColsA, requiredSupplColsB, _
+                               requiredSupplColIndexB, _
+                               suppColsAInitialized, suppColsBInitialized, _
+                               useArrays, rowResult
+                
+                ' Move to next result row
+                rowResult = rowResult + 1
+            End If
+        End If
+    Next i
+End Sub
+
+' Function 21: Process singleton in B
+Sub ProcessSingletonB(wsFileA As Worksheet, wsFileB As Worksheet, wsResult As Worksheet, _
+                     wsSupplB As Worksheet, _
+                     dataB() As Variant, supplDataB() As Variant, _
+                     colMapAKeys() As String, colMapAValues() As Long, colMapACount As Long, _
+                     colMapBKeys() As String, colMapBValues() As Long, colMapBCount As Long, _
+                     rowB As Long, colSupplKeyB As Long, _
+                     lastColA As Long, lastColB As Long, _
+                     sourceB As String, supplKeyB As String, _
+                     reconColCount As Long, _
+                     hasSupplA As Boolean, hasSupplB As Boolean, _
+                     requiredSupplColsA() As String, requiredSupplColsB() As String, _
+                     requiredSupplColIndexB() As Long, _
+                     suppColsAInitialized As Boolean, suppColsBInitialized As Boolean, _
+                     useArrays As Boolean, _
+                     rowResult As Long)
+    
+    Dim j As Long, k As Long
+    Dim colOffset As Long
+    Dim mappedColNameA As String, mappedColNameB As String
+    Dim mappedColIndex As Long
+    Dim suppAColCount As Long
+    Dim singletonSupplMatchRowB As Long
+    
+    ' Recon Result column
+    wsResult.Cells(rowResult, 1).Value = "Singleton in " & sourceB
+    
+    ' Skip File A columns (both original and mapped)
+    colOffset = 2 ' Start after Recon Result column
+    
+    For j = 1 To lastColA
+        ' Only process non-mapped columns
+        If Right(wsFileA.Cells(3, j).Value, 4) <> "_map" Then
+            colOffset = colOffset + 1 ' Skip original column
+            
+            ' Check if there's a mapped version and skip it too
+            mappedColNameA = wsFileA.Cells(3, j).Value & "_map"
+            mappedColIndex = 0
+            
+            For k = 1 To colMapACount
+                If colMapAKeys(k) = mappedColNameA Then
+                    mappedColIndex = colMapAValues(k)
+                    Exit For
+                End If
+            Next k
+            
+            If mappedColIndex > 0 Then
+                colOffset = colOffset + 1 ' Skip mapped column
+            End If
+        End If
+    Next j
+    
+    ' Skip supplementary A columns if needed
+    If hasSupplA And suppColsAInitialized Then
+        suppAColCount = 0
+        
+        ' Count non-empty supplementary columns
+        For j = 0 To UBound(requiredSupplColsA)
+            If requiredSupplColsA(j) <> "" Then
+                suppAColCount = suppAColCount + 1
+            End If
+        Next j
+        
+        colOffset = colOffset + suppAColCount
+    End If
+    
+    ' Write File B data - both original and mapped
+    WriteFileBData wsFileB, wsResult, dataB, _
+                 colMapBKeys, colMapBValues, colMapBCount, _
+                 rowB, rowResult, lastColB, useArrays, colOffset
+    
+    ' Write supplementary data for File B if needed
+    If hasSupplB And suppColsBInitialized Then
+        singletonSupplMatchRowB = FindSupplementaryMatch(wsFileB, wsSupplB, _
+                                                      dataB, supplDataB, _
+                                                      colMapBKeys, colMapBValues, colMapBCount, _
+                                                      rowB, colSupplKeyB, supplKeyB, _
+                                                      useArrays, True)
+        
+        WriteSupplementaryData wsResult, wsSupplB, supplDataB, _
+                             singletonSupplMatchRowB, requiredSupplColsB, requiredSupplColIndexB, _
+                             rowResult, colOffset, useArrays
+    End If
+    
+    ' UPDATED: Mark recon columns with source-specific singleton message
+    For j = 1 To reconColCount
+        wsResult.Cells(rowResult, colOffset).Value = "Singleton in " & sourceB
+        wsResult.Cells(rowResult, colOffset).Interior.Color = RGB(255, 235, 156) ' Light orange
+        colOffset = colOffset + 1
+    Next j
+End Sub
+
+' Function 22:Write Supplementary Data into Result worksheet
+Sub WriteSupplementaryData(wsResult As Worksheet, wsSuppl As Worksheet, supplData() As Variant, _
+                          supplMatchRow As Long, requiredSupplCols() As String, requiredSupplColIndex() As Long, _
+                          rowResult As Long, ByRef colOffset As Long, useArrays As Boolean)
+        
+    Dim j As Long
+        
+    For j = 0 To UBound(requiredSupplCols)
+        If requiredSupplCols(j) <> "" Then
+            If supplMatchRow > 0 Then
+                On Error Resume Next
+                If useArrays Then
+                    wsResult.Cells(rowResult, colOffset).Value = supplData(supplMatchRow, requiredSupplColIndex(j))
+                Else
+                    wsResult.Cells(rowResult, colOffset).Value = wsSuppl.Cells(supplMatchRow, requiredSupplColIndex(j)).Value
+                End If
+                If Err.Number <> 0 Then
+                    wsResult.Cells(rowResult, colOffset).Value = "Error retrieving data"
+                End If
+                On Error GoTo 0
+            Else
+                wsResult.Cells(rowResult, colOffset).Value = "N/A - No supplementary record is found"
+            End If
+            colOffset = colOffset + 1
+        End If
+    Next j
+End Sub
+
+' Add these helper functions to your module OUTSIDE of any other Sub or Function
+
+' Helper function to find column index from column maps
+Function GetColMapValue(keys() As String, values() As Long, count As Long, key As String) As Long
+    Dim idx As Long
+    GetColMapValue = 0 ' Default not found
+    
+    For idx = 1 To count
+        If keys(idx) = key Then
+            GetColMapValue = values(idx)
+            Exit Function
+        End If
+    Next idx
+End Function
+
+' Helper function to find a value in the lookup table
+Function FindInLookup(keys() As String, values() As Long, count As Long, key As String, caseSensitive As Boolean) As Long
+    Dim idx As Long
+    FindInLookup = 0 ' Default not found
+    
+    For idx = 1 To count
+        ' Compare using appropriate case sensitivity
+        If caseSensitive Then
+            ' Case-sensitive comparison (binary comparison)
+            If StrComp(keys(idx), key, vbBinaryCompare) = 0 Then
+                FindInLookup = values(idx)
+                Exit Function
+            End If
+        Else
+            ' Case-insensitive comparison (text compare)
+            If StrComp(keys(idx), key, vbTextCompare) = 0 Then
+                FindInLookup = values(idx)
+                Exit Function
+            End If
+        End If
+    Next idx
+End Function
+
+
+Function FindColumnIndex(ws As Worksheet, columnName As String) As Long
+
+    ' Find the index of a column with the specified name in row 3
+    ' Optimized version with early exit
+    Dim lastCol As Long
+    Dim i As Long
+
+    FindColumnIndex = 0 ' Default to not found
+
+    ' Quick exit for empty name
+    If columnName = "" Then Exit Function
+
+    ' Use Range.Find for faster search
+    Dim foundCell As Range
+
+    On Error Resume Next
+    Set foundCell = ws.Rows(3).Find(What:=columnName, _
+                                   LookIn:=xlValues, _
+                                   LookAt:=xlWhole, _
+                                   SearchOrder:=xlByColumns, _
+                                   MatchCase:=False)
+
+    If Not foundCell Is Nothing Then
+        FindColumnIndex = foundCell.Column
+        Exit Function
+    End If
+
+    ' Fallback to linear search if Find fails
+    lastCol = ws.Cells(3, ws.Columns.count).End(xlToLeft).Column
+
+    For i = 1 To lastCol
+        If ws.Cells(3, i).Value = columnName Then
+            FindColumnIndex = i
+            Exit Function
+        End If
+    Next i
+End Function
+
+Function GetRequiredSupplementaryColumns(fileType As String) As String()
+    ' Get the list of required supplementary columns from the Input Parameters sheet
+    Dim ws As Worksheet
+    Dim startCol As String
+    Dim startRow As Long
+    Dim i As Long
+    Dim colCount As Long
+    Dim tempArray() As String
+    
+    ' Set worksheet
+    Set ws = Worksheets("Input Parameters")
+    
+    ' Determine the start column and row based on file type
+    If fileType = "A" Then
+        startCol = "L"
+        startRow = 6  ' Start from row 6 in column L
+    ElseIf fileType = "B" Then
+        startCol = "N"
+        startRow = 6  ' Start from row 6 in column N
+    Else
+        ReDim tempArray(0)
+        tempArray(0) = ""
+        GetRequiredSupplementaryColumns = tempArray
+        Exit Function
+    End If
+    
+    ' Debug start location
+    Debug.Print "Looking for " & fileType & " columns starting at " & startCol & startRow
+    
+    ' Count how many columns are required (non-empty cells)
+    colCount = 0
+    i = startRow
+    
+    Do While i <= startRow + gintMaxReconciliationColumns  ' Use global max columns
+        ' Debug each cell being checked
+        Debug.Print "Row " & i & " contains: " & ws.Range(startCol & i).Value
+        
+        If Trim(ws.Range(startCol & i).Value) = "" Then
+            Exit Do
+        End If
+        colCount = colCount + 1
+        i = i + 1
+    Loop
+    
+    Debug.Print "Found " & colCount & " columns for type " & fileType
+    
+    ' If no columns required, return empty array
+    If colCount = 0 Then
+        ReDim tempArray(0)
+        tempArray(0) = ""
+        GetRequiredSupplementaryColumns = tempArray
+        Exit Function
+    End If
+    
+    ' Get the column names
+    ReDim tempArray(0 To colCount - 1)
+    
+    For i = 0 To colCount - 1
+        tempArray(i) = Trim(ws.Range(startCol & (startRow + i)).Value)
+        Debug.Print "Reading supplementary column " & fileType & ": " & tempArray(i)
+    Next i
+    
+    GetRequiredSupplementaryColumns = tempArray
+End Function
+
+' =================================== DASHBOARD FUNCTIONS ===================================
+
+Sub ClearDashboardSheet()
+    ' Clear both content and formatting from the Dashboard sheet
+    On Error GoTo ErrorHandler
+    
+    Dim wsDashboard As Worksheet
+    
+    ' Set worksheet
+    Set wsDashboard = Worksheets("Dashboard")
+    
+    ' Preserve title and subtitle
+    Dim title As String, subtitle As String
+    title = wsDashboard.Range("A1").Value
+    subtitle = wsDashboard.Range("A2").Value
+    
+    ' Clear everything from row 3 down (both content and formatting)
+    wsDashboard.Range("A3:ZZ" & wsDashboard.Rows.count).ClearContents
+    wsDashboard.Range("A3:ZZ" & wsDashboard.Rows.count).ClearFormats
+    
+    ' Delete any existing charts
+    On Error Resume Next
+    If wsDashboard.ChartObjects.count > 0 Then
+        wsDashboard.ChartObjects.Delete
+    End If
+    On Error GoTo ErrorHandler
+    
+    ' Restore title and subtitle
+    wsDashboard.Range("A1").Value = title
+    wsDashboard.Range("A1").Font.Bold = True
+    wsDashboard.Range("A1").Font.Size = 16
+    wsDashboard.Range("A2").Value = subtitle
+    wsDashboard.Range("A2").Font.Italic = True
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in ClearDashboardSheet", vbCritical, "Error"
+End Sub
+
+Sub GenerateDashboard()
+    ' Generate dashboard with reconciliation summary
+    On Error GoTo ErrorHandler
+    
+    Application.ScreenUpdating = False
+    
+    Dim wsDashboard As Worksheet
+    Dim wsResult As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim totalCount As Long
+    Dim matchCount As Long
+    Dim unmatchCount As Long
+    Dim singletonACount As Long
+    Dim singletonBCount As Long
+    Dim reconResult As String
+    
+    ' Set worksheets
+    Set wsDashboard = Worksheets("Dashboard")
+    Set wsResult = Worksheets("Result")
+    
+    ' Clear dashboard (both content and formatting)
+    ClearDashboardSheet
+    
+    ' Check if reconciliation has been run
+    lastRow = wsResult.Cells(wsResult.Rows.count, 1).End(xlUp).Row
+    
+    If lastRow <= 3 Then
+        MsgBox "No reconciliation results found. Please run reconciliation first.", vbExclamation, "No Data"
+        GoTo CleanExit
+    End If
+    
+    ' Count reconciliation statuses
+    totalCount = lastRow - 3
+    matchCount = 0
+    unmatchCount = 0
+    singletonACount = 0
+    singletonBCount = 0
+    
+    For i = 4 To lastRow
+        reconResult = wsResult.Cells(i, 1).Value
+        
+        If InStr(1, reconResult, "Full Key Match", vbTextCompare) > 0 Or _
+           InStr(1, reconResult, "Primary Key Match", vbTextCompare) > 0 Then
+            ' Check if contains "All Fields Match"
+            If InStr(1, reconResult, "All Fields Match", vbTextCompare) > 0 Then
+                matchCount = matchCount + 1
+            Else
+                unmatchCount = unmatchCount + 1
+            End If
+        ElseIf InStr(1, reconResult, "Singleton in " & gstrInputASource, vbTextCompare) > 0 Then
+            singletonACount = singletonACount + 1
+        ElseIf InStr(1, reconResult, "Singleton in " & gstrInputBSource, vbTextCompare) > 0 Then
+            singletonBCount = singletonBCount + 1
+        End If
+    Next i
+    
+    ' Populate dashboard summary
+    wsDashboard.Range("A3").Value = "RECONCILIATION SUMMARY"
+    wsDashboard.Range("A3").Font.Bold = True
+    wsDashboard.Range("A3").Font.Size = 14
+    
+    wsDashboard.Range("A5").Value = "Total Records Processed:"
+    wsDashboard.Range("B5").Value = totalCount
+    
+    wsDashboard.Range("A6").Value = "Fully Matched Records:"
+    wsDashboard.Range("B6").Value = matchCount
+    wsDashboard.Range("C6").Value = Format(matchCount / totalCount, "0.0%")
+    
+    wsDashboard.Range("A7").Value = "Records with Differences:"
+    wsDashboard.Range("B7").Value = unmatchCount
+    wsDashboard.Range("C7").Value = Format(unmatchCount / totalCount, "0.0%")
+    
+    wsDashboard.Range("A8").Value = "Singletons in " & gstrInputASource & ":"
+    wsDashboard.Range("B8").Value = singletonACount
+    wsDashboard.Range("C8").Value = Format(singletonACount / totalCount, "0.0%")
+    
+    wsDashboard.Range("A9").Value = "Singletons in " & gstrInputBSource & ":"
+    wsDashboard.Range("B9").Value = singletonBCount
+    wsDashboard.Range("C9").Value = Format(singletonBCount / totalCount, "0.0%")
+    
+    ' Format dashboard
+    wsDashboard.Range("A5:C9").Borders.LineStyle = xlContinuous
+    
+    ' Add a simple chart
+    CreateDashboardChart wsDashboard, matchCount, unmatchCount, singletonACount, singletonBCount
+    
+    ' Auto-fit columns
+    wsDashboard.Columns("A:C").AutoFit
+    
+CleanExit:
+    Application.ScreenUpdating = True
+    
+    If Err.Number = 0 Then
+        MsgBox "Dashboard generated successfully!", vbInformation, "Dashboard Complete"
+    End If
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description & " in GenerateDashboard", vbCritical, "Error"
+    Resume CleanExit
+End Sub
+
+Function IsRowFullMatch(wsResult As Worksheet, rowNum As Long) As Boolean
+    ' Check if all reconciliation columns in a row show "MATCH"
+    Dim lastCol As Long
+    Dim i As Long
+    
+    lastCol = wsResult.Cells(3, wsResult.Columns.count).End(xlToLeft).Column
+    
+    ' Start from the first reconciliation column
+    For i = lastCol - 10 To lastCol ' Assumption: last 10 columns are recon results
+        If wsResult.Cells(3, i).Value Like "*Recon*" Then
+            If wsResult.Cells(rowNum, i).Value <> "MATCH" And _
+               wsResult.Cells(rowNum, i).Value <> "Singleton" Then
+                IsRowFullMatch = False
+                Exit Function
+            End If
+        End If
+    Next i
+    
+    IsRowFullMatch = True
+End Function
+
+Sub CreateDashboardChart(ws As Worksheet, matchCount As Long, unmatchCount As Long, _
+                         singletonACount As Long, singletonBCount As Long)
+    ' Create a simple chart in the dashboard
+    Dim chartObj As ChartObject
+    Dim chartData As Range
+    
+    ' Create data for chart
+    ws.Range("E5").Value = "Category"
+    ws.Range("F5").Value = "Count"
+    
+    ws.Range("E6").Value = "Matched"
+    ws.Range("F6").Value = matchCount
+    
+    ws.Range("E7").Value = "Unmatched"
+    ws.Range("F7").Value = unmatchCount
+    
+    ws.Range("E8").Value = "Singleton in " & gstrInputASource
+    ws.Range("F8").Value = singletonACount
+    
+    ws.Range("E9").Value = "Singleton in " & gstrInputBSource
+    ws.Range("F9").Value = singletonBCount
+    
+    ' Create chart
+    Set chartData = ws.Range("E5:F9")
+    
+    ' Delete any existing charts
+    If ws.ChartObjects.count > 0 Then
+        ws.ChartObjects.Delete
+    End If
+    
+    ' Create new chart
+    Set chartObj = ws.ChartObjects.Add(320, 50, 400, 250)
+    
+    With chartObj.Chart
+        .SetSourceData Source:=chartData
+        .ChartType = xlPie
+        .HasTitle = True
+        .ChartTitle.text = "Reconciliation Results"
+        .HasLegend = True
+        .Legend.Position = xlLegendPositionRight
+    End With
+    
+    ' Apply colors
+    chartObj.Chart.SeriesCollection(1).Points(1).Interior.Color = RGB(146, 208, 80) ' Green for matches
+    chartObj.Chart.SeriesCollection(1).Points(2).Interior.Color = RGB(255, 0, 0)    ' Red for unmatches
+    chartObj.Chart.SeriesCollection(1).Points(3).Interior.Color = RGB(255, 192, 0)  ' Orange for singleton A
+    chartObj.Chart.SeriesCollection(1).Points(4).Interior.Color = RGB(0, 176, 240)  ' Blue for singleton B
+End Sub
+
+' =================================== RUN ALL STEPS ===================================
+
+Sub RunAllSteps()
+    ' Run all reconciliation steps in sequence
+    Application.ScreenUpdating = False
+    
+    ' Load Input Files
+    LoadInputFiles
+    
+    ' Load Supplementary Files
+    LoadSupplementaryFiles
+    
+    ' Apply Mapping
+    ApplyMapping
+    
+    ' Run Reconciliation
+    RunReconciliation
+    
+    ' Generate Dashboard
+    GenerateDashboard
+    
+    Application.ScreenUpdating = True
+    MsgBox "All reconciliation steps completed successfully!", vbInformation, "Process Complete"
+End Sub
+
+' =================================== PLATFORM SPECIFIC NOTES ===================================
+
+' ===== WINDOWS VS MACOS COMPATIBILITY NOTES =====
+'
+' 1. File Paths:
+'    - macOS uses forward slashes (/) in file paths
+'    - Windows uses backslashes (\) in file paths
+'    - When moving to Windows, you may need to update file paths or use Replace() to convert slashes
+'
+' 2. File Dialogs:
+'    - This code uses simple file path input via cells rather than file dialogs for better cross-platform compatibility
+'    - If you add file dialogs later, note that Application.FileDialog works differently across platforms
+'
+' 3. ActiveX Controls:
+'    - This code uses Form controls (Buttons) instead of ActiveX controls for better macOS compatibility
+'    - On Windows, you might prefer ActiveX controls for more formatting options
+'
+' 4. Line Endings:
+'    - macOS and Windows use different line ending characters, which can affect text file parsing
+'    - The code handles this automatically using Line Input
+'
+' 5. Performance:
+'    - Excel on Windows typically performs better with large datasets
+'    - If you have performance issues on macOS, consider loading smaller chunks of data
+'
+' 6. Color Models:
+'    - This code uses RGB() for colors which works on both platforms
+'    - Some advanced color features might behave differently across platforms
+'
+' 7. Chart Objects:
+'    - Chart object behavior can vary slightly between platforms
+'    - The code uses basic chart properties that work on both platforms
+
+
+
